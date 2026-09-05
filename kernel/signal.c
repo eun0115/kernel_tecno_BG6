@@ -55,9 +55,6 @@
 #include <asm/unistd.h>
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
-/* REKERNEL */
-#include <../drivers/rekernel/rekernel.h>
-/* REKERNEL */
 
 /*
  * SLAB caches for signal bits.
@@ -1289,15 +1286,6 @@ int do_send_sig_info(int sig, struct kernel_siginfo *info, struct task_struct *p
 {
 	unsigned long flags;
 	int ret = -ESRCH;
-/* REKERNEL */
-	if (start_rekernel_server() == 0) {
-		if (line_is_frozen(current) && (sig == SIGKILL || sig == SIGTERM || sig == SIGABRT || sig == SIGQUIT)) {
-	 			char binder_kmsg[PACKET_SIZE];
-			snprintf(binder_kmsg, sizeof(binder_kmsg), "type=Signal,signal=%d,killer_pid=%d,killer=%d,dst_pid=%d,dst=%d;", sig, task_tgid_nr(p), task_uid(p).val, task_tgid_nr(current), task_uid(current).val);
-	 			send_netlink_message(binder_kmsg, strlen(binder_kmsg));
-		}
-	}
-/* REKERNEL */
 
 	if (lock_task_sighand(p, &flags)) {
 		ret = send_signal(sig, info, p, type);
@@ -2126,7 +2114,7 @@ static inline bool may_ptrace_stop(void)
  * If we actually decide not to stop at all because the tracer
  * is gone, we keep current->exit_code unless clear_code.
  */
-static void ptrace_stop(int exit_code, int why, int clear_code, unsigned long message, kernel_siginfo_t *info)
+static void ptrace_stop(int exit_code, int why, int clear_code, kernel_siginfo_t *info)
 	__releases(&current->sighand->siglock)
 	__acquires(&current->sighand->siglock)
 {
@@ -2171,7 +2159,7 @@ static void ptrace_stop(int exit_code, int why, int clear_code, unsigned long me
 	 * [L]         task_is_traced()		[S] task_clear_jobctl_trapping();
 	 */
 	smp_wmb();
-	current->ptrace_message = message;
+
 	current->last_siginfo = info;
 	current->exit_code = exit_code;
 
@@ -2250,7 +2238,7 @@ static void ptrace_stop(int exit_code, int why, int clear_code, unsigned long me
 	 */
 	spin_lock_irq(&current->sighand->siglock);
 	current->last_siginfo = NULL;
-	current->ptrace_message = 0;
+
 	/* LISTENING can be set only during STOP traps, clear it */
 	current->jobctl &= ~JOBCTL_LISTENING;
 
@@ -2262,7 +2250,7 @@ static void ptrace_stop(int exit_code, int why, int clear_code, unsigned long me
 	recalc_sigpending_tsk(current);
 }
 
-static void ptrace_do_notify(int signr, int exit_code, int why, unsigned long message)
+static void ptrace_do_notify(int signr, int exit_code, int why)
 {
 	kernel_siginfo_t info;
 
@@ -2273,17 +2261,17 @@ static void ptrace_do_notify(int signr, int exit_code, int why, unsigned long me
 	info.si_uid = from_kuid_munged(current_user_ns(), current_uid());
 
 	/* Let the debugger run.  */
-	ptrace_stop(exit_code, why, 1, message, &info);
+	ptrace_stop(exit_code, why, 1, &info);
 }
 
-void ptrace_notify(int exit_code, unsigned long message)
+void ptrace_notify(int exit_code)
 {
 	BUG_ON((exit_code & (0x7f | ~0xffff)) != SIGTRAP);
 	if (unlikely(current->task_works))
 		task_work_run();
 
 	spin_lock_irq(&current->sighand->siglock);
-	ptrace_do_notify(SIGTRAP, exit_code, CLD_TRAPPED, message);
+	ptrace_do_notify(SIGTRAP, exit_code, CLD_TRAPPED);
 	spin_unlock_irq(&current->sighand->siglock);
 }
 
@@ -2438,10 +2426,10 @@ static void do_jobctl_trap(void)
 			signr = SIGTRAP;
 		WARN_ON_ONCE(!signr);
 		ptrace_do_notify(signr, signr | (PTRACE_EVENT_STOP << 8),
-				 CLD_STOPPED, 0);
+				 CLD_STOPPED);
 	} else {
 		WARN_ON_ONCE(!signr);
-		ptrace_stop(signr, CLD_STOPPED, 0, 0, NULL);
+		ptrace_stop(signr, CLD_STOPPED, 0, NULL);
 		current->exit_code = 0;
 	}
 }
@@ -2495,7 +2483,7 @@ static int ptrace_signal(int signr, kernel_siginfo_t *info)
 	 * comment in dequeue_signal().
 	 */
 	current->jobctl |= JOBCTL_STOP_DEQUEUED;
-	ptrace_stop(signr, CLD_TRAPPED, 0, 0, info);
+	ptrace_stop(signr, CLD_TRAPPED, 0, info);
 
 	/* We're back.  Did the debugger cancel the sig?  */
 	signr = current->exit_code;

@@ -382,7 +382,7 @@ static void dpu_run(struct dpu_context *ctx)
 
 	ctx->stopped = false;
 
-	pr_debug("dpu run\n");
+	pr_info("dpu run\n");
 }
 
 static void dpu_sdp_set(struct dpu_context *ctx,

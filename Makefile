@@ -194,7 +194,7 @@ ifeq ($(need-sub-make),)
 # Do not print "Entering directory ...",
 # but we want to display it when entering to the output directory
 # so that IDEs/editors are able to understand relative filenames.
-MAKEFLAGS += --no-print-directory -j$(NPROC)
+MAKEFLAGS += --no-print-directory
 
 # Call a source code checker (by default, "sparse") as part of the
 # C compilation.
@@ -364,7 +364,7 @@ include scripts/subarch.include
 # Alternatively CROSS_COMPILE can be set in the environment.
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
-ARCH		?= arm64
+ARCH		?= $(SUBARCH)
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -395,7 +395,7 @@ KCONFIG_CONFIG	?= .config
 export KCONFIG_CONFIG
 
 # SHELL used by kbuild
-CONFIG_SHELL := bash
+CONFIG_SHELL := sh
 
 HOST_LFS_CFLAGS := $(shell getconf LFS_CFLAGS 2>/dev/null)
 HOST_LFS_LDFLAGS := $(shell getconf LFS_LDFLAGS 2>/dev/null)
@@ -461,10 +461,10 @@ CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 NOSTDINC_FLAGS :=
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
-LDFLAGS_MODULE  = --strip-debug
+LDFLAGS_MODULE  =
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
-LDFLAGS_vmlinux = --strip-debug
+LDFLAGS_vmlinux =
 
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE    := \
@@ -485,15 +485,10 @@ LINUXINCLUDE    := \
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__ -fno-PIE
 KBUILD_CFLAGS   := -Wall -Werror -Wundef -Werror=strict-prototypes -Wno-trigraphs \
-           -fno-strict-aliasing -fno-common -fshort-wchar -fno-PIE \
-           -Werror=implicit-function-declaration -Werror=implicit-int \
-           -Werror=return-type -Wno-format-security \
-           -std=gnu89 \
-           -march=armv8.2-a+crypto+crc+lse -mtune=cortex-a75 -pipe -fdiagnostics-color=always \
-           -Wno-unused-function -Wno-unused-variable -Wno-misleading-indentation \
-           -Wno-pointer-sign -Wno-frame-address \
-           -fno-semantic-interposition -fmerge-all-constants -fno-math-errno \
-		   -fomit-frame-pointer -fno-stack-protector -falign-functions=32 -funroll-loops
+		   -fno-strict-aliasing -fno-common -fshort-wchar -fno-PIE \
+		   -Werror=implicit-function-declaration -Werror=implicit-int \
+		   -Werror=return-type -Wno-format-security \
+		   -std=gnu89
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
@@ -507,11 +502,6 @@ CLANG_FLAGS :=
 
 ifeq ($(AGING_BUILD),yes)
     CLANG_FLAGS += -DAGING_BUILD
-endif
-
-# Detect available host thread counts
-ifndef NPROC
-  NPROC = $(shell nproc)
 endif
 
 export ARCH SRCARCH CONFIG_SHELL BASH HOSTCC KBUILD_HOSTCFLAGS CROSS_COMPILE LD CC
@@ -566,23 +556,6 @@ ifdef building_out_of_srctree
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkmakefile $(srctree)
 	$(Q)test -e .gitignore || \
 	{ echo "# this is build directory, ignore it"; echo "*"; } > .gitignore
-endif
-
-ifneq ($(shell $(srctree)/toolchain/bin/clang --version 2>&1 | head -n 1 | grep clang),)
-CC		= $(srctree)/toolchain/bin/clang
-LD		= $(srctree)/toolchain/bin/ld.lld
-AR		= $(srctree)/toolchain/bin/llvm-ar
-NM		= $(srctree)/toolchain/bin/llvm-nm
-OBJCOPY		= $(srctree)/toolchain/bin/llvm-objcopy
-OBJDUMP		= $(srctree)/toolchain/bin/llvm-objdump
-READELF		= $(srctree)/toolchain/bin/llvm-readelf
-OBJSIZE		= $(srctree)/toolchain/bin/llvm-size
-STRIP		= $(srctree)/toolchain/bin/llvm-strip
-CROSS_COMPILE = $(srctree)/toolchain/bin/aarch64-linux-gnu-
-CROSS_COMPILE_ARM32 = $(srctree)/toolchain/bin/arm-linux-gnueabi-
-LLVM		= 1
-LLVM_IAS	= 1
-export CC LD AR NM OBJCOPY OBJDUMP READELF OBJSIZE STRIP CROSS_COMPILE CROSS_COMPILE_ARM32 LLVM LLVM_IAS
 endif
 
 ifneq ($(shell $(CC) --version 2>&1 | head -n 1 | grep clang),)
@@ -776,16 +749,6 @@ else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
 endif
 
-ifdef CONFIG_LLVM_POLLY
-KBUILD_CFLAGS	+= -mllvm -polly \
-		   -mllvm -polly-run-inliner \
-		   -mllvm -polly-opt-fusion=max \
-		   -mllvm -polly-ast-use-context \
-		   -mllvm -polly-detect-keep-going \
-		   -mllvm -polly-vectorizer=stripmine \
-		   -mllvm -polly-invariant-load-hoisting
-endif
-
 # Tell gcc to never replace conditional load with a non-conditional one
 KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
 KBUILD_CFLAGS	+= $(call cc-option,-fno-allow-store-data-races)
@@ -805,8 +768,6 @@ endif
 
 ifneq ($(CONFIG_FRAME_WARN),0)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
-KBUILD_LDFLAGS	+= $(call cc-option,-plugin-opt=-warn-stack-size=${CONFIG_FRAME_WARN})
-KBUILD_LDFLAGS	+= $(call cc-option,-fatal-warnings)
 endif
 
 stackp-flags-$(CONFIG_CC_HAS_STACKPROTECTOR_NONE) := -fno-stack-protector
@@ -814,11 +775,6 @@ stackp-flags-$(CONFIG_STACKPROTECTOR)             := -fstack-protector
 stackp-flags-$(CONFIG_STACKPROTECTOR_STRONG)      := -fstack-protector-strong
 
 KBUILD_CFLAGS += $(stackp-flags-y)
-
-KBUILD_CFLAGS += $(call cc-disable-warning, address)
-KBUILD_CFLAGS += $(call cc-disable-warning, array-compare)
-KBUILD_CFLAGS += $(call cc-disable-warning, format)
-KBUILD_CFLAGS += $(call cc-disable-warning, implicit-fallthrough)
 
 ifdef CONFIG_CC_IS_CLANG
 KBUILD_CPPFLAGS += -Qunused-arguments
@@ -830,6 +786,12 @@ KBUILD_CFLAGS += -Wno-tautological-compare
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
 # See modpost pattern 2
 KBUILD_CFLAGS += -mno-global-merge
+else
+
+# Warn about unmarked fall-throughs in switch statement.
+# Disabled for clang while comment to attribute conversion happens and
+# https://github.com/ClangBuiltLinux/linux/issues/636 is discussed.
+KBUILD_CFLAGS += $(call cc-option,-Wimplicit-fallthrough,)
 endif
 
 # These warnings generated too much noise in a regular build.
@@ -950,10 +912,8 @@ ifdef CONFIG_LTO_CLANG
 ifdef CONFIG_THINLTO
 CC_FLAGS_LTO_CLANG := -flto=thin $(call cc-option, -fsplit-lto-unit)
 KBUILD_LDFLAGS	+= --thinlto-cache-dir=.thinlto-cache
-# LLVM tunings
-KBUILD_LDFLAGS += -mllvm -inline-threshold=500
 else
-CC_FLAGS_LTO_CLANG := -flto 
+CC_FLAGS_LTO_CLANG := -flto
 endif
 CC_FLAGS_LTO_CLANG += -fvisibility=default
 
@@ -964,11 +924,17 @@ KBUILD_LDFLAGS += $(LD_FLAGS_LTO_CLANG)
 KBUILD_LDFLAGS_MODULE += $(LD_FLAGS_LTO_CLANG)
 
 KBUILD_LDS_MODULE += scripts/module-lto.lds
+
+# Check for frame size exceeding threshold during prolog/epilog insertion.
+ifneq ($(CONFIG_FRAME_WARN),0)
+KBUILD_LDFLAGS	+= -plugin-opt=-warn-stack-size=$(CONFIG_FRAME_WARN)
+KBUILD_LDFLAGS	+= -fatal-warnings
+endif
 endif
 
 ifdef CONFIG_LTO
 CC_FLAGS_LTO	:= $(CC_FLAGS_LTO_CLANG)
-KBUILD_CFLAGS	+= $(CC_FLAGS_LTO) 
+KBUILD_CFLAGS	+= $(CC_FLAGS_LTO)
 export CC_FLAGS_LTO
 endif
 
@@ -998,7 +964,7 @@ endif
 NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 
 # warn about C99 declaration after statement
-KBUILD_CFLAGS += $(call cc-disable-warning,-Wdeclaration-after-statement,)
+KBUILD_CFLAGS += -Wdeclaration-after-statement
 
 # Variable Length Arrays (VLAs) should not be used anywhere in the kernel
 KBUILD_CFLAGS += -Wvla
@@ -1016,6 +982,9 @@ KBUILD_CFLAGS += $(call cc-disable-warning, stringop-overflow)
 
 # Another good warning that we'll want to enable eventually
 KBUILD_CFLAGS += $(call cc-disable-warning, restrict)
+
+# Enabled with W=2, disabled by default as noisy
+KBUILD_CFLAGS += $(call cc-disable-warning, maybe-uninitialized)
 
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)

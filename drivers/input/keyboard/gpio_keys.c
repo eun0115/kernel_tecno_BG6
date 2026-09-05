@@ -1035,7 +1035,7 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int gpio_keys_button_enable_wakeup(struct gpio_button_data *bdata)
+gpio_keys_button_enable_wakeup(struct gpio_button_data *bdata)
 {
 	int error;
 
