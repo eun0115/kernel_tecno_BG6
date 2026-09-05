@@ -1079,6 +1079,7 @@ config ARCH_HAS_MEM_ENCRYPT
 	bool
 
 source "kernel/gcov/Kconfig"
+source "kernel/pgo/Kconfig"
 
 source "scripts/gcc-plugins/Kconfig"
 

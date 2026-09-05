@@ -48,6 +48,11 @@ ifneq ($(hostprogs-y)$(hostprogs-m)$(hostlibs-y)$(hostlibs-m)$(hostcxxlibs-y)$(h
 include scripts/Makefile.host
 endif
 
+# Do not include host rules unless needed
+ifneq ($(dtbo-y),)
+include scripts/Makefile.dtbo
+endif
+
 ifndef obj
 $(warning kbuild: Makefile.build is included improperly)
 endif
@@ -288,8 +293,12 @@ cmd_mod = { \
 	$(undefined_syms) echo; \
 	} > $@
 
+cmd_mod_lds = $(if $(KBUILD_LDS_MODULE_ATTACH), cat $(srctree)/$(src)/$(firstword $(KBUILD_LDS_MODULE_ATTACH)) > $(@:.mod=.lds))
+
 $(obj)/%.mod: $(obj)/%.o FORCE
 	$(call if_changed,mod)
+	$(call cmd,mod_lds)
+
 
 targets += $(mod-targets)
 

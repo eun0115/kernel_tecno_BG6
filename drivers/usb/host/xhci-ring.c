@@ -2776,7 +2776,6 @@ static int xhci_handle_event(struct xhci_hcd *xhci)
 		return 0;
 
 	trace_xhci_handle_event(xhci->event_ring, &event->generic);
-
 	/*
 	 * Barrier between reading the TRB_CYCLE (valid) flag above and any
 	 * speculative reads of the event's flags/data below.

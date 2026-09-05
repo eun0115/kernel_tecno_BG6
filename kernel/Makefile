@@ -86,7 +86,7 @@ obj-$(CONFIG_KCOV) += kcov.o
 obj-$(CONFIG_KPROBES) += kprobes.o
 obj-$(CONFIG_FAIL_FUNCTION) += fail_function.o
 obj-$(CONFIG_KGDB) += debug/
-obj-$(CONFIG_DETECT_HUNG_TASK) += hung_task.o
+obj-y += hung_task.o
 obj-$(CONFIG_LOCKUP_DETECTOR) += watchdog.o
 obj-$(CONFIG_HARDLOCKUP_DETECTOR_PERF) += watchdog_hld.o
 obj-$(CONFIG_SECCOMP) += seccomp.o
@@ -106,6 +106,7 @@ obj-$(CONFIG_CPU_PM) += cpu_pm.o
 obj-$(CONFIG_BPF) += bpf/
 obj-$(CONFIG_SHADOW_CALL_STACK) += scs.o
 obj-$(CONFIG_CFI_CLANG) += cfi.o
+obj-$(CONFIG_PGO_CLANG) += pgo/
 
 obj-$(CONFIG_PERF_EVENTS) += events/
 

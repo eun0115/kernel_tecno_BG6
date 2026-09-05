@@ -1315,4 +1315,19 @@ config TOUCHSCREEN_IQS5XX
 	  To compile this driver as a module, choose M here: the
 	  module will be called iqs5xx.
 
+config TOUCHSCREEN_HIMAX_CHIPSET
+	tristate "Himax touchpanel CHIPSET"
+	depends on I2C
+	help
+		Say Y here if you have a Himax CHIPSET touchscreen. 
+		HIMAX controllers are multi touch controllers which can
+		report 10 touches at a time.
+
+		If unsure, say N.
+	
+source "drivers/input/touchscreen/hxchipset/Kconfig"
+source "drivers/input/touchscreen/omnivision_tcm/Kconfig"
+source "drivers/input/touchscreen/focaltech_touch/Kconfig"
+source "drivers/input/touchscreen/focaltech_spi/Kconfig"
+source "drivers/input/touchscreen/chipone_icnl__9916c/Kconfig"
 endif

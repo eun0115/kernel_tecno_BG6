@@ -10,7 +10,7 @@
  * Locking overview
  *
  * There are 3 main spinlocks which must be acquired in the
- * order shown:
+ * order shown////:
  *
  * 1) proc->outer_lock : protects binder_ref
  *    binder_proc_lock() and binder_proc_unlock() are

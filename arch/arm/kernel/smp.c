@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/cpu.h>
+#include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/irq.h>
 #include <linux/nmi.h>
@@ -49,6 +50,8 @@
 #include <asm/virt.h>
 #include <asm/mach/arch.h>
 #include <asm/mpu.h>
+#include <asm/system_misc.h>
+#include <linux/soc/sprd/sprd_sysdump.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/ipi.h>
@@ -542,6 +545,28 @@ void show_ipi_list(struct seq_file *p, int prec)
 {
 	unsigned int cpu, i;
 
+#ifdef CONFIG_SPRD_SYSDUMP
+	if (!p) {
+		if (!sprd_irqstat_seq_buf)
+			return;
+		for (i = 0; i < NR_IPI; i++) {
+			unsigned int irq;
+
+			if (!ipi_desc[i])
+				continue;
+
+			irq = irq_desc_get_irq(ipi_desc[i]);
+			seq_buf_printf(sprd_irqstat_seq_buf, "%*s%u: ", prec - 1, "IPI", i);
+
+			for_each_possible_cpu(cpu)
+				seq_buf_printf(sprd_irqstat_seq_buf, "%10u ",
+						kstat_irqs_cpu(irq, cpu));
+
+			seq_buf_printf(sprd_irqstat_seq_buf, " %s\n", ipi_types[i]);
+		}
+		return;
+	}
+#endif
 	for (i = 0; i < NR_IPI; i++) {
 		unsigned int irq;
 
@@ -595,12 +620,6 @@ static DEFINE_RAW_SPINLOCK(stop_lock);
  */
 static void ipi_cpu_stop(unsigned int cpu)
 {
-	if (system_state <= SYSTEM_RUNNING) {
-		raw_spin_lock(&stop_lock);
-		pr_crit("CPU%u: stopping\n", cpu);
-		dump_stack();
-		raw_spin_unlock(&stop_lock);
-	}
 
 	set_cpu_online(cpu, false);
 
@@ -626,6 +645,21 @@ static void ipi_complete(unsigned int cpu)
 	complete(per_cpu(cpu_completion, cpu));
 }
 
+#ifdef CONFIG_SPRD_HANG_TRIGGER
+extern bool ipi_is_triggered(unsigned int cpu);
+#endif
+
+#ifdef CONFIG_SPRD_SYSDUMP
+extern void sysdump_ipi(struct pt_regs *regs);
+static void sysdump_ipi_handle(void)
+{
+	struct pt_regs *regs = get_irq_regs();
+
+	sysdump_ipi(regs);
+
+}
+#endif
+
 /*
  * Main handler for inter-processor interrupts
  */
@@ -637,6 +671,9 @@ asmlinkage void __exception_irq_entry do_IPI(int ipinr, struct pt_regs *regs)
 static void do_handle_IPI(int ipinr)
 {
 	unsigned int cpu = smp_processor_id();
+#ifdef CONFIG_SPRD_SYSDUMP
+	struct pt_regs pregs;
+#endif
 
 	if ((unsigned)ipinr < NR_IPI)
 		trace_ipi_entry_rcuidle(ipi_types[ipinr]);
@@ -652,6 +689,13 @@ static void do_handle_IPI(int ipinr)
 #endif
 
 	case IPI_RESCHEDULE:
+		#ifdef CONFIG_SPRD_HANG_TRIGGER
+		/* used for trigger cpu hang */
+		if (ipi_is_triggered(cpu)) {
+			while (1)
+				;
+		}
+		#endif
 		scheduler_ipi();
 		break;
 
@@ -660,6 +704,22 @@ static void do_handle_IPI(int ipinr)
 		break;
 
 	case IPI_CPU_STOP:
+		if (system_state <= SYSTEM_RUNNING) {
+			raw_spin_lock(&stop_lock);
+			pr_crit("CPU%u: stopping\n", cpu);
+#ifdef CONFIG_SPRD_SYSDUMP
+			memset(&pregs, 0x00, sizeof(pregs));
+			get_pt_regs(&pregs);
+#if !defined(CONFIG_FRAME_POINTER) && !defined(CONFIG_FUNCTION_TRACER)
+			pregs.ARM_fp = (unsigned long)__builtin_frame_address(0);
+#endif
+			sprd_dump_stack_reg(cpu, &pregs);
+#endif
+			raw_spin_unlock(&stop_lock);
+		}
+#ifdef CONFIG_SPRD_SYSDUMP
+		sysdump_ipi_handle();
+#endif
 		ipi_cpu_stop(cpu);
 		break;
 

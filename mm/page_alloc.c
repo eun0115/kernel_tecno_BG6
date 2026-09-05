@@ -76,6 +76,19 @@
 #include "internal.h"
 #include "shuffle.h"
 
+#ifdef OPLUS_FEATURE_HEALTHINFO
+/* Huacai.Zhou@PSW.BSP.Kernel.MM, 2018-07-07, add alloc wait monitor support*/
+#if (defined CONFIG_OPLUS_MEM_MONITOR) && (defined CONFIG_OPLUS_HEALTHINFO)
+#include <linux/healthinfo/memory_monitor.h>
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
+#if defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+#include "multi_freearea.h"
+#endif
+#ifdef CONFIG_HYBRIDSWAP
+#include <trace/hooks/vh_vmscan.h>
+#endif
+
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
 #define MIN_PERCPU_PAGELIST_FRACTION	(8)
@@ -149,6 +162,18 @@ DEFINE_STATIC_KEY_TRUE(init_on_free);
 DEFINE_STATIC_KEY_FALSE(init_on_free);
 #endif
 EXPORT_SYMBOL(init_on_free);
+
+static atomic_long_t nr_high_atomic_pages;
+
+void inc_high_atomic_nr_pages(long count)
+{
+	atomic_long_add(count, &nr_high_atomic_pages);
+}
+
+unsigned long highatomic_nr_pages(void)
+{
+	return atomic_long_read(&nr_high_atomic_pages);
+}
 
 static int __init early_init_on_alloc(char *buf)
 {
@@ -1333,6 +1358,9 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		VM_BUG_ON_PAGE(is_migrate_isolate(mt), page);
 		/* Pageblock could have been isolated meanwhile */
 		if (unlikely(isolated_pageblocks))
+			mt = get_pageblock_migratetype(page);
+
+		if (is_migrate_highatomic_page(page))
 			mt = get_pageblock_migratetype(page);
 
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
@@ -2527,12 +2555,13 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 {
 	int mt;
 	unsigned long max_managed, flags;
+	int move_num;
 
 	/*
 	 * Limit the number reserved to 1 pageblock or roughly 1% of a zone.
 	 * Check is race-prone but harmless.
 	 */
-	max_managed = (zone_managed_pages(zone) / 100) + pageblock_nr_pages;
+	max_managed = pageblock_nr_pages;
 	if (zone->nr_reserved_highatomic >= max_managed)
 		return;
 
@@ -2548,7 +2577,8 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	    && !is_migrate_cma(mt)) {
 		zone->nr_reserved_highatomic += pageblock_nr_pages;
 		set_pageblock_migratetype(page, MIGRATE_HIGHATOMIC);
-		move_freepages_block(zone, page, MIGRATE_HIGHATOMIC, NULL);
+		move_num = move_freepages_block(zone, page, MIGRATE_HIGHATOMIC, NULL);
+		atomic_long_add(move_num, &nr_high_atomic_pages);
 	}
 
 out_unlock:
@@ -2574,6 +2604,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 	struct page *page;
 	int order;
 	bool ret;
+	int moved_num;
 
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, ac->high_zoneidx,
 								ac->nodemask) {
@@ -2623,8 +2654,11 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 			 * may increase.
 			 */
 			set_pageblock_migratetype(page, ac->migratetype);
-			ret = move_freepages_block(zone, page, ac->migratetype,
-									NULL);
+			moved_num = move_freepages_block(zone, page,
+						ac->migratetype, NULL);
+			ret = moved_num;
+			atomic_long_sub(moved_num, &nr_high_atomic_pages);
+
 			if (ret) {
 				spin_unlock_irqrestore(&zone->lock, flags);
 				return ret;
@@ -2814,6 +2848,8 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		if (is_migrate_cma(get_pcppage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
 					      -(1 << order));
+		else if (is_migrate_highatomic_page(page))
+			atomic_long_sub(1 << order, &nr_high_atomic_pages);
 	}
 
 	/*
@@ -3383,6 +3419,10 @@ struct page *rmqueue(struct zone *preferred_zone,
 
 	__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);
 	zone_statistics(preferred_zone, zone);
+#ifdef CONFIG_HYBRIDSWAP
+	trace_android_vh_rmqueue(preferred_zone, zone, order,
+			gfp_flags, alloc_flags, migratetype);
+#endif
 	local_irq_restore(flags);
 
 out:
@@ -3500,7 +3540,7 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	 * atomic reserve but it avoids a search.
 	 */
 	if (likely(!alloc_harder)) {
-		free_pages -= z->nr_reserved_highatomic;
+		free_pages -= atomic_long_read(&nr_high_atomic_pages);
 	} else {
 		/*
 		 * OOM victims can try even harder than normal ALLOC_HARDER
@@ -4803,6 +4843,15 @@ fail:
 	warn_alloc(gfp_mask, ac->nodemask,
 			"page allocation failure: order:%u", order);
 got_pg:
+#ifdef OPLUS_FEATURE_HEALTHINFO
+/* Huacai.Zhou@PSW.BSP.Kernel.MM, 2018-07-07, add alloc wait monitor support*/
+#if (defined CONFIG_OPLUS_MEM_MONITOR) && (defined CONFIG_OPLUS_HEALTHINFO)
+	memory_alloc_monitor(gfp_mask, order, jiffies_to_msecs(jiffies - alloc_start));
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
+#ifdef CONFIG_HYBRIDSWAP
+	trace_android_vh_alloc_pages_slowpath(gfp_mask, order, 0);
+#endif
 	return page;
 }
 
@@ -5419,7 +5468,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		" unevictable:%lu dirty:%lu writeback:%lu unstable:%lu\n"
 		" slab_reclaimable:%lu slab_unreclaimable:%lu\n"
 		" mapped:%lu shmem:%lu pagetables:%lu bounce:%lu\n"
-		" free:%lu free_pcp:%lu free_cma:%lu\n",
+		" free:%lu free_pcp:%lu free_cma:%lu\n free_highatomic:%lu\n",
 		global_node_page_state(NR_ACTIVE_ANON),
 		global_node_page_state(NR_INACTIVE_ANON),
 		global_node_page_state(NR_ISOLATED_ANON),
@@ -5438,7 +5487,8 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		global_zone_page_state(NR_BOUNCE),
 		global_zone_page_state(NR_FREE_PAGES),
 		free_pcp,
-		global_zone_page_state(NR_FREE_CMA_PAGES));
+		global_zone_page_state(NR_FREE_CMA_PAGES),
+		atomic_long_read(&nr_high_atomic_pages));
 
 	for_each_online_pgdat(pgdat) {
 		if (show_mem_node_skip(filter, pgdat->node_id, nodemask))
@@ -5503,6 +5553,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		printk(KERN_CONT
 			"%s"
 			" free:%lukB"
+			" boost:%lukB"
 			" min:%lukB"
 			" low:%lukB"
 			" high:%lukB"
@@ -5524,9 +5575,11 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" free_pcp:%lukB"
 			" local_pcp:%ukB"
 			" free_cma:%lukB"
+			" free_highatomic:%lukB"
 			"\n",
 			zone->name,
 			K(zone_page_state(zone, NR_FREE_PAGES)),
+			K(zone->watermark_boost),
 			K(min_wmark_pages(zone)),
 			K(low_wmark_pages(zone)),
 			K(high_wmark_pages(zone)),
@@ -5547,7 +5600,8 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone_page_state(zone, NR_BOUNCE)),
 			K(free_pcp),
 			K(this_cpu_read(zone->pageset->pcp.count)),
-			K(zone_page_state(zone, NR_FREE_CMA_PAGES)));
+			K(zone_page_state(zone, NR_FREE_CMA_PAGES)),
+			K(atomic_long_read(&nr_high_atomic_pages)));
 		printk("lowmem_reserve[]:");
 		for (i = 0; i < MAX_NR_ZONES; i++)
 			printk(KERN_CONT " %ld", zone->lowmem_reserve[i]);
@@ -8030,7 +8084,7 @@ void setup_per_zone_wmarks(void)
  * 8192MB:	11584k
  * 16384MB:	16384k
  */
-int __meminit init_per_zone_wmark_min(void)
+void calculate_min_free_kbytes(void)
 {
 	unsigned long lowmem_kbytes;
 	int new_min_free_kbytes;
@@ -8045,9 +8099,15 @@ int __meminit init_per_zone_wmark_min(void)
 		if (min_free_kbytes > 65536)
 			min_free_kbytes = 65536;
 	} else {
+		min_free_kbytes = user_min_free_kbytes;
 		pr_warn("min_free_kbytes is not updated to %d because user defined value %d is preferred\n",
 				new_min_free_kbytes, user_min_free_kbytes);
 	}
+}
+
+int __meminit init_per_zone_wmark_min(void)
+{
+	calculate_min_free_kbytes();
 	setup_per_zone_wmarks();
 	refresh_zone_stat_thresholds();
 	setup_per_zone_lowmem_reserve();

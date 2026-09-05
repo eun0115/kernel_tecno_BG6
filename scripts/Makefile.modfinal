@@ -39,6 +39,8 @@ ifdef CONFIG_LTO_CLANG
 		 $(addprefix -T , $(KBUILD_LDS_MODULE))			\
 		 $(shell [ -s $(@:.ko=.o.symversions) ] &&		\
 			echo -T $(@:.ko=.o.symversions))  		\
+		 $(shell [ -s $(@:.ko=.lds) ] &&			\
+			echo -T $(@:.ko=.lds))  			\
 		 -o $@ --whole-archive $(filter %.o, $^);		\
 	$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) $@, true)
 
@@ -50,6 +52,8 @@ else
 	$(LD) -r $(KBUILD_LDFLAGS)					\
 		$(KBUILD_LDFLAGS_MODULE) $(LDFLAGS_MODULE)		\
 		$(addprefix -T , $(KBUILD_LDS_MODULE))			\
+		$(shell [ -s $(@:.ko=.lds) ] &&				\
+			echo -T $(@:.ko=.lds))  			\
 		-o $@ $(filter %.o, $^);				\
 	$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) $@, true)
 endif

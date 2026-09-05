@@ -41,5 +41,24 @@ int mmc_flush_cache(struct mmc_card *card);
 int mmc_cmdq_enable(struct mmc_card *card);
 int mmc_cmdq_disable(struct mmc_card *card);
 
+#ifdef CONFIG_MMC_SPRD_MMCHEALTH
+#define YMTC_EC110_eMMC 1  //cjcc changjiangcunchu 32G
+#define HFCS_32G_eMMC1 2 //zhaoxin 32G
+#define HFCS_32G_eMMC2 3 //zhaoxin 32G
+//#define HFCS_64G_eMMC1 4 //zhaoxin 64G
+#define HFCS_64G_eMMC2 4 //zhaoxin 64G
+#define Western_Digital_eMMC 5 //sandisk shandi
+#define YMTC_EC110_eMMC1 6 //cjcc changjiangcunchu 128G
+#define YMTC_EC110_eMMC2 7 //cjcc changjiangcunchu 64G
+#define Micron_64G_eMMC 8 //Micron 64G
+#define Micron_128G_eMMC 9 //Micron 128G
+#define Foresee_64G_eMMC 10 //Jiangbolong 64G
+#define Foresee_128G_eMMC 11 //Jiangbolong 128G
+#define Phison_64G_eMMC 12 //Qunlian 64G
+#define Phison_128G_eMMC 13 //Qunlian 64G
+#define YMTC_EC230_eMMC 14 //cjcc changjiangcunchu 256G
+int mmc_health(struct mmc_card *card);
+int get_emmc_mode(void);
+#endif
 #endif
 

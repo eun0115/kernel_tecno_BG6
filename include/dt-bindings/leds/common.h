@@ -32,6 +32,11 @@
 #define LED_COLOR_ID_MAX	8
 
 /* Standard LED functions */
+#define LED_FUNCTION_PLAYER1 "player-1"
+#define LED_FUNCTION_PLAYER2 "player-2"
+#define LED_FUNCTION_PLAYER3 "player-3"
+#define LED_FUNCTION_PLAYER4 "player-4"
+#define LED_FUNCTION_PLAYER5 "player-5"
 #define LED_FUNCTION_ACTIVITY "activity"
 #define LED_FUNCTION_ALARM "alarm"
 #define LED_FUNCTION_BACKLIGHT "backlight"

@@ -458,6 +458,14 @@ config MISC_RTSX
 	tristate
 	default MISC_RTSX_PCI || MISC_RTSX_USB
 
+config SPRD_UID
+	tristate "Spreadtrum Uid Support"
+	depends on ARCH_SPRD || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  provoid a driver to get chip uid.
+	  UID based statistics exported to /sys/class/misc/sprd_uid/uid.
+
 config UID_SYS_STATS
 	bool "Per-UID statistics"
 	depends on PROFILING && TASK_XACCT && TASK_IO_ACCOUNTING
@@ -473,6 +481,13 @@ config UID_SYS_STATS_DEBUG
 	help
 	  Per TASK based io statistics exported to /proc/uid_io
 
+config UID_IO_DEBUG
+	bool "uid_io state debug"
+	depends on SPRD_DEBUG && UID_SYS_STATS
+	default y
+	help
+	  log uid io stats per 5s with 2 buff
+
 config PVPANIC
 	tristate "pvpanic device support"
 	depends on HAS_IOMEM && (ACPI || OF)
@@ -486,6 +501,16 @@ config HISI_HIKEY_USB
 	depends on OF && GPIOLIB
 	help
 	  If you say yes here you get support for usb functionality of HiSilicon Hikey Platform.
+
+config SPRD_SOCID
+	tristate "Spreadtrum soc id Support"
+	help
+	  provoid a driver to get soc id.
+
+config OP_RF_CABLE_MONITOR
+	tristate  "OP_RF_CABLE_MONITOR"
+	help
+		provoid a driver to get rf status.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
@@ -502,4 +527,7 @@ source "drivers/misc/cxl/Kconfig"
 source "drivers/misc/ocxl/Kconfig"
 source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/habanalabs/Kconfig"
+source "drivers/misc/vibrator/Kconfig"
+source "drivers/misc/hqhardwareinfo/Kconfig"
+source "drivers/misc/device_info/Kconfig"
 endmenu

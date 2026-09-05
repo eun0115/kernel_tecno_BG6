@@ -1143,12 +1143,14 @@ static void __init_discard_policy(struct f2fs_sb_info *sbi,
 		dpolicy->io_aware = true;
 		dpolicy->sync = false;
 		dpolicy->ordered = true;
-		if (utilization(sbi) > DEF_DISCARD_URGENT_UTIL) {
+		if (utilization(sbi) >= (DEF_DISCARD_URGENT_UTIL - 2)) {
 			dpolicy->granularity = 1;
+			sbi->interval_time[DISCARD_TIME] = 1;
 			if (atomic_read(&dcc->discard_cmd_cnt))
 				dpolicy->max_interval =
 					DEF_MIN_DISCARD_ISSUE_TIME;
-		}
+		} else
+			sbi->interval_time[DISCARD_TIME] = DEF_IDLE_INTERVAL;
 	} else if (discard_type == DPOLICY_FORCE) {
 		dpolicy->min_interval = DEF_MIN_DISCARD_ISSUE_TIME;
 		dpolicy->mid_interval = DEF_MID_DISCARD_ISSUE_TIME;

@@ -4,7 +4,8 @@
  *
  * Copyright (c) 2019, Google, Inc.
  */
-
+#include <asm/cacheflush.h>
+#include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -13,10 +14,12 @@
 #include <trace/hooks/ion.h>
 
 #define CREATE_TRACE_POINTS
+#define COHERENT    1
 #include "ion_trace.h"
 #include "ion_private.h"
 
 static atomic_long_t total_heap_bytes;
+static atomic_long_t ion_heap_total_size;
 
 static void track_buffer_created(struct ion_buffer *buffer)
 {
@@ -32,6 +35,34 @@ static void track_buffer_destroyed(struct ion_buffer *buffer)
 	trace_ion_stat(buffer->sg_table, -buffer->size, total);
 }
 
+#ifdef CONFIG_E_SHOW_MEM
+/* this function should only be called while dev->lock is held */
+static void ion_buffer_add(struct ion_device *dev,
+			   struct ion_buffer *buffer)
+{
+	struct rb_node **p = &dev->buffers.rb_node;
+	struct rb_node *parent = NULL;
+	struct ion_buffer *entry;
+
+	while (*p) {
+		parent = *p;
+		entry = rb_entry(parent, struct ion_buffer, node);
+
+		if (buffer < entry) {
+			p = &(*p)->rb_left;
+		} else if (buffer > entry) {
+			p = &(*p)->rb_right;
+		} else {
+			pr_err("%s: buffer already found.", __func__);
+			BUG();
+		}
+	}
+
+	rb_link_node(&buffer->node, parent, p);
+	rb_insert_color(&buffer->node, &dev->buffers);
+}
+#endif
+
 /* this function should only be called while dev->lock is held */
 static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 					    struct ion_device *dev,
@@ -39,6 +70,9 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 					    unsigned long flags)
 {
 	struct ion_buffer *buffer;
+#ifdef CONFIG_E_SHOW_MEM
+	struct timespec64 ts;
+#endif
 	int ret;
 
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
@@ -84,7 +118,24 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 	INIT_LIST_HEAD(&buffer->attachments);
 	mutex_init(&buffer->lock);
+#ifdef CONFIG_E_SHOW_MEM
+	mutex_lock(&dev->buffer_lock);
+	ion_buffer_add(dev, buffer);
+	mutex_unlock(&dev->buffer_lock);
+#endif
 	track_buffer_created(buffer);
+
+	if (buffer->heap->type == ION_HEAP_TYPE_SYSTEM)
+		atomic_long_add(buffer->size, &ion_heap_total_size);
+
+#ifdef CONFIG_E_SHOW_MEM
+	buffer->pid = task_pid_nr(current->group_leader);
+	get_task_comm(buffer->task_name, current->group_leader);
+	ktime_get_real_ts64(&ts);
+	ts.tv_sec -= sys_tz.tz_minuteswest * 60;
+	buffer->alloc_ts = ts;
+#endif
+
 	return buffer;
 
 err1:
@@ -188,6 +239,35 @@ int ion_buffer_zero(struct ion_buffer *buffer)
 }
 EXPORT_SYMBOL_GPL(ion_buffer_zero);
 
+#ifdef CONFIG_ARM
+static void ion_flush_buffer(struct page *page, size_t size, int coherent_flag)
+{
+	if (PageHighMem(page)) {
+		phys_addr_t base = __pfn_to_phys(page_to_pfn(page));
+		phys_addr_t end = base + size;
+
+		while (size > 0) {
+			void *ptr = kmap_atomic(page);
+
+			if (coherent_flag != COHERENT)
+				dmac_flush_range(ptr, ptr + PAGE_SIZE);
+			kunmap_atomic(ptr);
+			page++;
+			size -= PAGE_SIZE;
+		}
+		if (coherent_flag != COHERENT)
+			outer_flush_range(base, end);
+	} else {
+		void *ptr = page_address(page);
+
+		if (coherent_flag != COHERENT) {
+			dmac_flush_range(ptr, ptr + size);
+			outer_flush_range(__pa(ptr), __pa(ptr) + size);
+		}
+	}
+}
+#endif
+
 void ion_buffer_prep_noncached(struct ion_buffer *buffer)
 {
 	struct scatterlist *sg;
@@ -201,8 +281,19 @@ void ion_buffer_prep_noncached(struct ion_buffer *buffer)
 
 	table = buffer->sg_table;
 
-	for_each_sg(table->sgl, sg, table->orig_nents, i)
+	for_each_sg(table->sgl, sg, table->orig_nents, i) {
 		arch_dma_prep_coherent(sg_page(sg), sg->length);
+	/*
+	 * For uncached buffers, we need to initially flush cpu cache, since
+	 * the __GFP_ZERO on the allocation means the zeroing was done by the
+	 * cpu and thus it is likely cached. Map (and implicitly flush) and
+	 * unmap it now so we don't get corruption later on.arch_dma_prep_coherent()
+	 * is missing for arm32 so we flush cache in our own way.
+	 */
+#ifdef CONFIG_ARM
+	 ion_flush_buffer(sg_page(sg), sg->length, 0);
+#endif
+	}
 }
 EXPORT_SYMBOL_GPL(ion_buffer_prep_noncached);
 
@@ -237,6 +328,15 @@ int ion_buffer_destroy(struct ion_device *dev, struct ion_buffer *buffer)
 
 	heap = buffer->heap;
 	track_buffer_destroyed(buffer);
+
+#ifdef CONFIG_E_SHOW_MEM
+	mutex_lock(&dev->buffer_lock);
+	rb_erase(&buffer->node, &dev->buffers);
+	mutex_unlock(&dev->buffer_lock);
+#endif
+
+	if (buffer->heap->type == ION_HEAP_TYPE_SYSTEM)
+		atomic_long_sub(buffer->size, &ion_heap_total_size);
 
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_freelist_add(heap, buffer);
@@ -280,4 +380,9 @@ void ion_buffer_kmap_put(struct ion_buffer *buffer)
 u64 ion_get_total_heap_bytes(void)
 {
 	return atomic_long_read(&total_heap_bytes);
+}
+
+long get_ion_heap_total_pages(void)
+{
+	return atomic_long_read(&ion_heap_total_size) >> PAGE_SHIFT;
 }

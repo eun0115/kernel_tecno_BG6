@@ -33,6 +33,7 @@ config ARM
 	select ARCH_OPTIONAL_KERNEL_RWX if ARCH_HAS_STRICT_KERNEL_RWX
 	select ARCH_OPTIONAL_KERNEL_RWX_DEFAULT if CPU_V7
 	select ARCH_SUPPORTS_ATOMIC_RMW
+	select ARCH_SUPPORTS_PGO_CLANG
 	select ARCH_USE_BUILTIN_BSWAP
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT if MMU
@@ -749,6 +750,8 @@ source "arch/arm/mach-zx/Kconfig"
 
 source "arch/arm/mach-zynq/Kconfig"
 
+source "arch/arm/mach-sprd/Kconfig"
+
 # ARMv7-M architecture
 config ARCH_EFM32
 	bool "Energy Micro efm32"
@@ -1171,6 +1174,12 @@ config ARM_ERRATA_814220
 endmenu
 
 menu "Kernel Features"
+
+config AARCH32_SHOW_AARCH64_CPUINFO
+	bool "Show cpuinfo ARMV8"
+	default y
+	help
+	  This option show cpuinfo ARMV8.
 
 config HAVE_SMP
 	bool
@@ -1741,6 +1750,12 @@ config DEPRECATED_PARAM_STRUCT
 	help
 	  This was deprecated in 2001 and announced to live on for 5 years.
 	  Some old boot loaders still use this way.
+
+config BUILD_ARM_DTC
+	string "dtc to use"
+
+config BUILD_ARM_DTC_FLAGS
+	string "extra dtc flags"
 
 # Compressed boot loader in ROM.  Yes, we really want to ask about
 # TEXT and BSS so we preserve their values in the config files.

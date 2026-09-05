@@ -484,6 +484,8 @@ struct sdhci_host {
  * block count.
  */
 #define SDHCI_QUIRK2_USE_32BIT_BLK_CNT			(1<<18)
+/* Controller only need to enable card en again after UHS timing was changed. */
+#define SDHCI_QUIRK2_RE_ENABLE_CARD_EN			(1<<19)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
@@ -807,5 +809,7 @@ void sdhci_send_tuning(struct sdhci_host *host, u32 opcode);
 void sdhci_abort_tuning(struct sdhci_host *host, u32 opcode);
 void sdhci_set_data_timeout_irq(struct sdhci_host *host, bool enable);
 void __sdhci_set_timeout(struct sdhci_host *host, struct mmc_command *cmd);
-
+#ifdef CONFIG_SPRD_DEBUG
+void mmc_debug_update(struct sdhci_host *host, struct mmc_command *cmd, u32 type);
+#endif
 #endif /* __SDHCI_HW_H */
