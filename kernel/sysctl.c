@@ -100,6 +100,9 @@
 #ifdef CONFIG_LOCKUP_DETECTOR
 #include <linux/nmi.h>
 #endif
+#ifdef CONFIG_SPRD_CMA_DEBUG
+#include <linux/cma.h>
+#endif
 
 #if defined(CONFIG_SYSCTL)
 
@@ -132,7 +135,9 @@ static unsigned long zero_ul;
 static unsigned long one_ul = 1;
 static unsigned long long_max = LONG_MAX;
 static int one_hundred = 100;
+#ifdef CONFIG_DIRECT_SWAPPINESS
 static int two_hundred = 200;
+#endif
 static int one_thousand = 1000;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
@@ -155,10 +160,12 @@ static const int cap_last_cap = CAP_LAST_CAP;
  * This is needed for proc_doulongvec_minmax of sysctl_hung_task_timeout_secs
  * and hung_task_check_interval_secs
  */
-#ifdef CONFIG_DETECT_HUNG_TASK
-static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
-#endif
 
+//odm alm_id:5321993 struk to reboot function ; build-in  for gki 2023/3/17 wangshuaishuai start
+//#ifdef CONFIG_DETECT_HUNG_TASK
+static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
+//#endif
+//odm alm_id:5321993 struk to reboot function ; build-in  for gki 2023/3/17 wangshuaishuai end
 #ifdef CONFIG_INOTIFY_USER
 #include <linux/inotify.h>
 #endif
@@ -504,6 +511,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sysctl_sched_uclamp_handler,
 	},
+	{
+		.procname	= "sched_clamp_min2boost",
+		.data		= &sysctl_sched_uclamp_min_to_boost,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 #endif
 #ifdef CONFIG_SCHED_AUTOGROUP
 	{
@@ -526,7 +542,7 @@ static struct ctl_table kern_table[] = {
 		.extra1		= SYSCTL_ONE,
 	},
 #endif
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
+#ifdef CONFIG_ENERGY_MODEL
 	{
 		.procname	= "sched_energy_aware",
 		.data		= &sysctl_sched_energy_aware,
@@ -1145,7 +1161,8 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
-#ifdef CONFIG_DETECT_HUNG_TASK
+//odm alm_id:5321993 struk to reboot function ; build-in  for gki 2023/3/17 wangshuaishuai start
+// #ifdef CONFIG_DETECT_HUNG_TASK
 	{
 		.procname	= "hung_task_panic",
 		.data		= &sysctl_hung_task_panic,
@@ -1187,7 +1204,9 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &neg_one,
 	},
-#endif
+//#endif
+//odm alm_id:5321993 struk to reboot function ; build-in  for gki 2023/3/17 wangshuaishuai end
+
 #ifdef CONFIG_RT_MUTEXES
 	{
 		.procname	= "max_lock_depth",
@@ -1341,6 +1360,26 @@ static struct ctl_table vm_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &two,
 	},
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	{
+		.procname	= "speculative_page_fault",
+		.data		= &sysctl_speculative_page_fault,
+		.maxlen		= sizeof(sysctl_speculative_page_fault),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
+#ifdef CONFIG_SPRD_CMA_DEBUG
+	{
+		.procname	= "sprd_cma_debug",
+		.data		= &sysctl_sprd_cma_debug,
+		.maxlen		= sizeof(int),
+		.mode		= 0200, /* write-only */
+		.proc_handler	= sysctl_sprd_cma_debug_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &two,
+	},
+#endif
 	{
 		.procname	= "panic_on_oom",
 		.data		= &sysctl_panic_on_oom,
@@ -1450,8 +1489,23 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
-		.extra2		= &two_hundred,
+#ifdef CONFIG_DIRECT_SWAPPINESS
+		.extra2         = &two_hundred,
+#else
+		.extra2         = &one_hundred,
+#endif
 	},
+#ifdef CONFIG_DIRECT_SWAPPINESS
+	{
+		.procname       = "direct_swappiness",
+		.data           = &direct_vm_swappiness,
+		.maxlen         = sizeof(direct_vm_swappiness),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
+		.extra2         = &two_hundred,
+	},
+#endif
 #ifdef CONFIG_NUMA
 	{
 		.procname	= "numa_stat",
@@ -1789,6 +1843,17 @@ static struct ctl_table vm_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 #endif
+#ifdef CONFIG_WRITEBACK_SWAPCACHE
+	{
+		.procname	= "writeback_swapcache",
+		.data		= &writeback_swapcache,
+		.maxlen		= sizeof(writeback_swapcache),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+#endif
 	{ }
 };
 
@@ -1952,6 +2017,15 @@ static struct ctl_table fs_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &two,
 	},
+#if defined(CONFIG_SPRD_DEBUG)
+	{
+		.procname	= "fs_timeout_ms",
+		.data		= &sysctl_fs_timeout[0],
+		.maxlen		= 5*sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 	{
 		.procname	= "suid_dumpable",
 		.data		= &suid_dumpable,

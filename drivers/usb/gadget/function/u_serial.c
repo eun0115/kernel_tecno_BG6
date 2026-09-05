@@ -272,6 +272,15 @@ __acquires(&port->port_lock)
 		spin_lock(&port->port_lock);
 		port->write_busy = false;
 
+		/* If port_usb is NULL, gserial disconnect is called
+		 * while the spinlock is dropped and all requests are
+		 * freed. Free the current requests here.
+		 */
+		if (!port->port_usb) {
+			gs_free_req(in, req);
+			break;
+		}
+
 		if (status) {
 			pr_debug("%s: %s %s err %d\n",
 					__func__, "queue", in->name, status);
@@ -280,10 +289,6 @@ __acquires(&port->port_lock)
 		}
 
 		port->write_started++;
-
-		/* abort immediately after disconnect */
-		if (!port->port_usb)
-			break;
 	}
 
 	if (do_tty_wake && port->port.tty)
@@ -327,6 +332,15 @@ __acquires(&port->port_lock)
 		status = usb_ep_queue(out, req, GFP_ATOMIC);
 		spin_lock(&port->port_lock);
 
+		/* If port_usb is NULL, gserial disconnect is called
+		 * while the spinlock is dropped and all requests are
+		 * freed. Free the current requests here.
+		 */
+		if (!port->port_usb) {
+			gs_free_req(out, req);
+			break;
+		}
+
 		if (status) {
 			pr_debug("%s: %s %s err %d\n",
 					__func__, "queue", out->name, status);
@@ -334,10 +348,6 @@ __acquires(&port->port_lock)
 			break;
 		}
 		port->read_started++;
-
-		/* abort immediately after disconnect */
-		if (!port->port_usb)
-			break;
 	}
 	return port->read_started;
 }
@@ -535,6 +545,7 @@ static int gs_start_io(struct gs_port *port)
 {
 	struct list_head	*head = &port->read_pool;
 	struct usb_ep		*ep = port->port_usb->out;
+	struct usb_ep		*epin = port->port_usb->in;
 	int			status;
 	unsigned		started;
 
@@ -549,7 +560,7 @@ static int gs_start_io(struct gs_port *port)
 	if (status)
 		return status;
 
-	status = gs_alloc_requests(port->port_usb->in, &port->write_pool,
+	status = gs_alloc_requests(epin, &port->write_pool,
 			gs_write_complete, &port->write_allocated);
 	if (status) {
 		gs_free_requests(ep, head, &port->read_allocated);
@@ -560,14 +571,18 @@ static int gs_start_io(struct gs_port *port)
 	port->n_read = 0;
 	started = gs_start_rx(port);
 
+	if (!port->port_usb)
+		return -EIO;
+
 	if (started) {
 		gs_start_tx(port);
 		/* Unblock any pending writes into our circular buffer, in case
 		 * we didn't in gs_start_tx() */
-		tty_wakeup(port->port.tty);
+		if (port->port.tty)
+			tty_wakeup(port->port.tty);
 	} else {
 		gs_free_requests(ep, head, &port->read_allocated);
-		gs_free_requests(port->port_usb->in, &port->write_pool,
+		gs_free_requests(epin, &port->write_pool,
 			&port->write_allocated);
 		status = -EIO;
 	}

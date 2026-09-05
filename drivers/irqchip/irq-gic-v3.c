@@ -18,6 +18,7 @@
 #include <linux/percpu.h>
 #include <linux/refcount.h>
 #include <linux/slab.h>
+#include <linux/sprd_ktp.h>
 #include <linux/wakeup_reason.h>
 
 
@@ -653,6 +654,8 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 		gic_pmr_mask_irqs();
 		gic_arch_enable_irqs();
 	}
+
+	kevent_tp(KTP_IRQ, (void *)(uintptr_t)irqnr);
 
 	if (static_branch_likely(&supports_deactivate_key))
 		gic_write_eoir(irqnr);
@@ -1823,6 +1826,11 @@ out_unmap_rdist:
 out_unmap_dist:
 	iounmap(dist_base);
 	return err;
+}
+
+unsigned long gic_get_gicd_base(void)
+{
+	return (unsigned long)gic_data.dist_base;
 }
 
 IRQCHIP_DECLARE(gic_v3, "arm,gic-v3", gicv3_of_init);

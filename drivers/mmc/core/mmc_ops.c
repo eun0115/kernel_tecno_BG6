@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
-/*
+ /*
  *  linux/drivers/mmc/core/mmc_ops.h
  *
  *  Copyright 2006-2007 Pierre Ossman
@@ -76,6 +75,14 @@ int __mmc_send_status(struct mmc_card *card, u32 *status, unsigned int retries)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(__mmc_send_status);
+
+#ifdef CONFIG_MMC_SPRD_MMCHEALTH
+#include <linux/mmc/sprd-mmc-health.h>
+static int emmc_flag;
+/*cjcc zhaoxin zhaoxin zhaoxin zhaoxin sandisk*/
+static unsigned int emmc_manfid[] = {0x9b, 0x32, 0x6b, 0x6b, 0x45, 0x9b, 0x9b, 0x000013, 0x000013, 0xd6, 0xd6, 0x32, 0x32, 0x9b};
+static char *emmc_prod_name[] = {"Y2P032", "MMC32G", "MMC32G", "MMC64G", "DA4032", "Y2P128", "Y2P064", "G2M211", "G2M212", "A3A561", "A3A562", "MMC64G", "MMC128G", "Y0S256"};
+#endif
 
 int mmc_send_status(struct mmc_card *card, u32 *status)
 {
@@ -456,6 +463,7 @@ static int mmc_poll_for_busy(struct mmc_card *card, unsigned int timeout_ms,
 	struct mmc_host *host = card->host;
 	int err;
 	unsigned long timeout;
+	unsigned int udelay = 32, udelay_max = 32768;
 	u32 status = 0;
 	bool expired = false;
 	bool busy = false;
@@ -499,6 +507,13 @@ static int mmc_poll_for_busy(struct mmc_card *card, unsigned int timeout_ms,
 			pr_err("%s: Card stuck being busy! %s\n",
 				mmc_hostname(host), __func__);
 			return -ETIMEDOUT;
+		}
+
+		/* Throttle the polling rate to avoid hogging the CPU*/
+		if (busy) {
+			usleep_range(udelay, udelay * 2);
+			if (udelay < udelay_max)
+				udelay *= 2;
 		}
 	} while (busy);
 
@@ -607,6 +622,477 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 			true, true, false);
 }
 EXPORT_SYMBOL_GPL(mmc_switch);
+/***************************************************************************************/
+#ifdef CONFIG_MMC_SPRD_MMCHEALTH
+int set_emmc_mode(struct mmc_card *card)
+{
+  int i;
+  unsigned int current_cid_manfid = card->cid.manfid;
+  char *current_prod_name = &card->cid.prod_name[0];
+
+  for (i = 0 ; i < sizeof(emmc_manfid)/sizeof(unsigned int); i++)
+  {
+	  pr_err("set_emmc_mode: current_cid_manfid=%d, current_prod_name = %s\n", current_cid_manfid, current_prod_name);
+      if ((current_cid_manfid == emmc_manfid[i]) && (!strncmp(current_prod_name, emmc_prod_name[i], 6)))
+       return emmc_flag = i+1;  //emmc num
+  }
+  return 0;
+}
+int get_emmc_mode(void)
+{
+	//pr_err("get_emmc_mode=%d\n", emmc_flag);
+    return emmc_flag;
+}
+static int mmc_send_health_data(struct mmc_card *card, struct mmc_host *host,
+		u32 opcode, void *buf, unsigned len, u32 arg)
+{
+	struct mmc_request mrq = {};
+	struct mmc_command cmd = {};
+	struct mmc_data data = {};
+	struct scatterlist sg;
+
+	mrq.cmd = &cmd;
+	mrq.data = &data;
+
+	cmd.opcode = opcode;
+	cmd.arg = arg;
+
+	cmd.flags = MMC_RSP_R1 | MMC_CMD_ADTC;
+
+	data.blksz = len;
+	data.blocks = 1;
+	data.flags = MMC_DATA_READ;
+	data.sg = &sg;
+	data.sg_len = 1;
+
+	sg_init_one(&sg, buf, len);
+
+	mmc_set_data_timeout(&data, card);
+
+	mmc_wait_for_req(host, &mrq);
+
+	if (cmd.error) {
+		pr_err("cmd%d, cmd error: %d\n", opcode, cmd.error);
+		return cmd.error;
+	}
+
+	if (data.error) {
+		pr_err("cmd%d, data error: %d\n", opcode, data.error);
+		return data.error;
+	}
+
+	return 0;
+}
+/* YMTC_EC110_eMMC */
+static int mmc_get_health_data1(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x594D54FB);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x29);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+/* HFCS 32G eMMC */
+static int mmc_get_health_data2(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x4B534BFB);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x0D);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+/* HFCS 64G eMMC */
+static int mmc_get_health_data3(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x4B534BFB);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+    /*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x29);
+	if (err)
+		goto out;
+    /*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+/* Western-Digital-iNAND-7550-eMMC */
+static int mmc_get_health_data4(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+    struct mmc_host *host = NULL;
+	struct mmc_command cmd = {};
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+
+    /* cmd 62 */
+	host = card->host;
+	cmd.opcode = MMC_SEND_MANUFACTURER_3;
+	cmd.arg = 0x96c9d71c;
+	cmd.flags = MMC_RSP_R1B | MMC_CMD_AC;
+
+	err = mmc_wait_for_cmd(host, &cmd, 0);
+	if (err) {
+		pr_err("mmc health CMD62, err=%d\n", err);
+		goto out;
+	}
+    /* cmd 63 */
+	err = mmc_send_health_data(card, card->host, MMC_SEND_MANUFACTURER_4, health_data, 512, 0);
+	if (err) {
+		pr_err("mmc health CMD63, err=%d\n", err);
+		goto out;
+	}
+
+	set_mmchealth_data(health_data);
+
+out:
+	kfree(health_data);
+	return err;
+}
+
+/* Micron -eMMC */
+static int mmc_get_health_data5(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+	/*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x0000000D);
+	if (err)
+		goto out;
+	/*CMD 13*/
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+
+/* Foresee -eMMC */
+static int foresee_mmc_get_health_data(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+
+	/*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x110005F1);
+	if (err)
+		goto out;
+	/*CMD 13*/
+
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+
+/* Phison_64G -eMMC */
+static int phison_64G_mmc_get_health_data(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+
+	/*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x0000000D);
+	if (err)
+		goto out;
+	/*CMD 13*/
+
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+
+/* Phison_128G -eMMC */
+static int phison_128G_mmc_get_health_data(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+
+	/*CMD 56*/
+	err = mmc_send_health_data(card, card->host, MMC_GEN_CMD,
+				health_data, 512, 0x00000035);
+	if (err)
+		goto out;
+	/*CMD 13*/
+
+	err = mmc_send_status(card, NULL);
+	if (err)
+		goto out;
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+
+static int mmc_get_health_data6(struct mmc_card *card)
+{
+	int err;
+	u8 *health_data;
+	struct mmc_host *host = card->host;
+	struct mmc_command cmd = {};
+
+	if (!card)
+		return -EINVAL;
+
+	health_data = kzalloc(512 * 3, GFP_KERNEL);
+	if (!health_data)
+		return -ENOMEM;
+	/* cmd 60 */
+	cmd.opcode = 60;
+	cmd.arg = 0x594d5443;
+	cmd.flags = MMC_RSP_R1B | MMC_CMD_AC;
+	err = mmc_wait_for_cmd(host, &cmd, 0);
+	if (err) {
+		pr_err("mmc health CMD60, err=%d\n", err);
+		goto out;
+	}
+
+	cmd.opcode = 60;
+	cmd.arg = 0x51300002;
+	cmd.flags = MMC_RSP_R1B | MMC_CMD_AC;
+	err = mmc_wait_for_cmd(host, &cmd, 0);
+	if (err) {
+		pr_err("mmc health CMD60, err=%d\n", err);
+		goto out;
+	}
+
+	/*CMD 18 read Health report data 3 sectors*/
+	{
+		struct mmc_request mrq = {};
+		struct mmc_command cmd = {};
+		struct mmc_data data = {};
+		struct scatterlist sg;
+
+		mrq.cmd = &cmd;
+		mrq.data = &data;
+
+		cmd.opcode = 18;
+		cmd.arg = 1;
+
+		cmd.flags = MMC_RSP_R1 | MMC_CMD_ADTC;
+
+		data.blksz = 512;
+		data.blocks = 3;
+		data.flags = MMC_DATA_READ;
+		data.sg = &sg;
+		data.sg_len = 1;
+
+		sg_init_one(&sg, health_data, 512 * 3);
+
+		mmc_set_data_timeout(&data, card);
+
+		mmc_wait_for_req(host, &mrq);
+
+		if (cmd.error) {
+			pr_err("cmd%d, cmd error: %d\n", cmd.opcode, cmd.error);
+			return cmd.error;
+		}
+
+		if (data.error) {
+			pr_err("cmd%d, data error: %d\n", cmd.opcode, data.error);
+			return data.error;
+		}
+	}
+	/* cmd 12 */
+	cmd.opcode = 12;
+	cmd.arg = 0;
+	cmd.flags = MMC_RSP_R1B | MMC_CMD_AC;
+	err = mmc_wait_for_cmd(host, &cmd, 0);
+	if (err) {
+		pr_err("mmc health CMD12, err=%d\n", err);
+		goto out;
+	}
+
+	set_mmchealth_data(health_data);
+out:
+	kfree(health_data);
+	return err;
+}
+
+/* api */
+int mmc_health(struct mmc_card *card)
+{
+	int err = -1;
+	int flag = 0;
+
+	/*获取cid,csd数据信息来判断颗粒*/
+	set_emmc_mode(card);
+	flag = get_emmc_mode();
+
+	/* YMTC_EC110_eMMC 32*/
+	if (flag == YMTC_EC110_eMMC)
+		err = mmc_get_health_data1(card);
+	/* HFCS 32G eMMC */
+	if (flag == HFCS_32G_eMMC1 || flag == HFCS_32G_eMMC2)
+		err = mmc_get_health_data2(card);
+	/* HFCS 64G eMMC */
+	if (flag == HFCS_64G_eMMC2)
+		err = mmc_get_health_data3(card);
+	/* Western-Digital-iNAND-7550-eMMC */
+	if (flag == Western_Digital_eMMC)
+		err = mmc_get_health_data4(card);
+	/* YMTC_EC110_eMMC 128*/
+	if (flag == YMTC_EC110_eMMC1)
+		err = mmc_get_health_data1(card);
+	/* YMTC_EC110_eMMC 64*/
+	if (flag == YMTC_EC110_eMMC2)
+		err = mmc_get_health_data1(card);
+	/* Micron_eMMC 64G*/
+	if (flag == Micron_64G_eMMC)
+		err = mmc_get_health_data5(card);
+	/* Micron_eMMC 128G*/
+	if (flag == Micron_128G_eMMC)
+		err = mmc_get_health_data5(card);
+	/* Foresee_eMMC 64G*/
+	if (flag == Foresee_64G_eMMC)
+		err = foresee_mmc_get_health_data(card);
+	/* Foresee_eMMC 128G*/
+	if (flag == Foresee_128G_eMMC)
+		err = foresee_mmc_get_health_data(card);
+	/* Phison_eMMC 64G*/
+	if (flag == Phison_64G_eMMC)
+		err = phison_64G_mmc_get_health_data(card);
+	/* Phison_eMMC 128G*/
+	if (flag == Phison_128G_eMMC)
+		err = phison_128G_mmc_get_health_data(card);
+	/* YMTC_EC230_eMMC 256*/
+	if (flag == YMTC_EC230_eMMC)
+	err = mmc_get_health_data6(card);
+
+	if (err)
+		pr_err("mmc health write count info\n");
+
+	sprd_create_mmc_health_init(flag);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(mmc_health);
+#endif
 
 int mmc_send_tuning(struct mmc_host *host, u32 opcode, int *cmd_error)
 {

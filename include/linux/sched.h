@@ -218,6 +218,9 @@ extern void scheduler_tick(void);
 
 #define	MAX_SCHEDULE_TIMEOUT		LONG_MAX
 
+#ifdef CONFIG_SPRD_CORE_CTL
+extern int ctrl_core_api(struct cpumask *target, int type);
+#endif
 extern long schedule_timeout(long timeout);
 extern long schedule_timeout_interruptible(long timeout);
 extern long schedule_timeout_killable(long timeout);
@@ -345,11 +348,19 @@ struct load_weight {
  * Only for tasks we track a moving average of the past instantaneous
  * estimated utilization. This allows to absorb sporadic drops in utilization
  * of an otherwise almost periodic task.
+ *
+ * The UTIL_AVG_UNCHANGED flag is used to synchronize util_est with util_avg
+ * updates. When a task is dequeued, its util_est should not be updated if its
+ * util_avg has not been updated in the meantime.
+ * This information is mapped into the MSB bit of util_est.enqueued at dequeue
+ * time. Since max value of util_est.enqueued for a task is 1024 (PELT util_avg
+ * for a task) it is safe to use MSB.
  */
 struct util_est {
 	unsigned int			enqueued;
 	unsigned int			ewma;
-#define UTIL_EST_WEIGHT_SHIFT		2
+#define UTIL_EST_WEIGHT_SHIFT		5
+#define UTIL_AVG_UNCHANGED		0x80000000
 } __attribute__((__aligned__(sizeof(u64))));
 
 /*
@@ -1298,9 +1309,11 @@ struct task_struct {
 	unsigned long			prev_lowest_stack;
 #endif
 
-	ANDROID_VENDOR_DATA_ARRAY(1, 2);
-	ANDROID_OEM_DATA_ARRAY(1, 3);
-
+	_ANDROID_KABI_REPLACE(ANDROID_VENDOR_DATA_ARRAY(1, 2), struct{ u64 last_enqueue_ts; u64 last_sleep_ts; });
+//odm alm_id:5321993 struk to reboot function ; build-in oem_data for gki 2023/3/17 wangshuaishuai start
+	_ANDROID_KABI_REPLACE(ANDROID_OEM_DATA_ARRAY(1, 3), struct{ unsigned long last_switch_count; unsigned long last_switch_time; unsigned long used_for_hung_task; });
+//	ANDROID_OEM_DATA_ARRAY(1, 3);
+//odm alm_id:5321993 struk to reboot function ; build-in oem_data for gki 2023/3/17 wangshuaishuai end
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
@@ -1309,6 +1322,7 @@ struct task_struct {
 	ANDROID_KABI_RESERVE(6);
 	ANDROID_KABI_RESERVE(7);
 	ANDROID_KABI_RESERVE(8);
+
 
 	/*
 	 * New fields for task_struct should be added above here, so that

@@ -43,6 +43,10 @@
 #include "internal.h"
 #include "mount.h"
 
+#ifdef CONFIG_SELINUX_AVC_BACKTRACE
+#include <linux/avc_backtrace.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/namei.h>
 
@@ -342,6 +346,13 @@ int generic_permission(struct inode *inode, int mask)
 	ret = acl_permission_check(inode, mask);
 	if (ret != -EACCES)
 		return ret;
+
+#ifdef CONFIG_SELINUX_AVC_BACKTRACE
+	if (avc_backtrace_enable == 1)
+		pr_info("check supplement group pid:%d comm:%s, uid:%d, gid:%d\n",
+		current->pid, current->comm,
+		inode->i_uid.val, inode->i_gid.val);
+#endif
 
 	if (S_ISDIR(inode->i_mode)) {
 		/* DACs are overridable for directories */
@@ -965,6 +976,15 @@ int sysctl_protected_symlinks __read_mostly = 0;
 int sysctl_protected_hardlinks __read_mostly = 0;
 int sysctl_protected_fifos __read_mostly;
 int sysctl_protected_regular __read_mostly;
+#if defined(CONFIG_SPRD_DEBUG)
+int sysctl_fs_timeout[] = {
+	500,	/* vfs_open_max_ms */
+	500,	/* vfs_write_max_ms */
+	2000,	/* fs_sync_max_ms */
+	500,	/* io_schedule_max_ms */
+	10,	/* io_interval in seconds */
+};
+#endif
 
 /**
  * may_follow_link - Check symlink following for unsafe situations

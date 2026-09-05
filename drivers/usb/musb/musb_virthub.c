@@ -163,7 +163,7 @@ void musb_port_reset(struct musb *musb, bool do_reset)
 			return;
 		}
 
-		power &= 0xf0;
+		power &= 0xf1;
 		musb_writeb(mbase, MUSB_POWER,
 				power | MUSB_POWER_RESET);
 

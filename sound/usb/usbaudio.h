@@ -183,4 +183,7 @@ struct snd_usb_audio_vendor_ops {
 	ANDROID_KABI_RESERVE(2);
 };
 
+void snd_usb_vendor_set(void);
+int snd_vendor_audio_offload(int stream);
+
 #endif /* __USBAUDIO_H */

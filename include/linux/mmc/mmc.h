@@ -92,6 +92,8 @@
 #define MMC_EXECUTE_READ_TASK    46   /* adtc [20:16] task id    R1  */
 #define MMC_EXECUTE_WRITE_TASK   47   /* adtc [20:16] task id    R1  */
 #define MMC_CMDQ_TASK_MGMT       48   /* ac   [20:16] task id    R1b */
+#define MMC_SEND_MANUFACTURER_3  62
+#define MMC_SEND_MANUFACTURER_4  63
 
 static inline bool mmc_op_multi(u32 opcode)
 {

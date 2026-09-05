@@ -744,6 +744,7 @@
   read_cache_page_gfp
   refcount_dec_and_test_checked
   refcount_inc_checked
+  refcount_warn_saturate
   __refrigerator
   __register_chrdev
   register_filesystem
@@ -2789,6 +2790,9 @@
   virtqueue_is_broken
 
 # required by wcn_bsp.ko
+  freq_qos_add_request
+  freq_qos_remove_request
+  freq_qos_update_request
   gpiod_set_value
   in_aton
   memdup_user
@@ -2853,3 +2857,38 @@
 
 # required by zsmalloc.ko
   wait_on_page_bit
+
+# sprd hybridswap
+  bitmap_parselist
+  blkdev_get_by_dev
+  cpumask_next_and
+  __cpu_present_mask
+  refcount_dec_and_mutex_lock
+  sched_show_task
+  set_cpus_allowed_ptr
+  vm_node_stat
+  wait_for_completion_io_timeout
+
+  cgroup_add_legacy_cftypes
+  eventfd_ctx_fileget
+  eventfd_signal
+  __fdget
+  filp_open
+  mem_cgroup_from_id
+  memory_cgrp_subsys
+  memory_cgrp_subsys_enabled_key
+  of_css
+  register_memory_notifier
+  si_swapinfo
+  __tracepoint_android_vh_mem_cgroup_alloc
+  __tracepoint_android_vh_mem_cgroup_css_offline
+  __tracepoint_android_vh_mem_cgroup_css_online
+  __tracepoint_android_vh_mem_cgroup_free
+  __tracepoint_android_vh_mem_cgroup_id_remove
+  __tracepoint_android_vh_rmqueue
+  __tracepoint_android_vh_tune_scan_type
+  tracepoint_probe_unregister
+  try_to_free_mem_cgroup_pages
+  unregister_memory_notifier
+  vm_zone_stat
+

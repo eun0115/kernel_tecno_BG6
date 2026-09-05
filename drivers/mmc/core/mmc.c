@@ -1551,6 +1551,22 @@ static int mmc_hs200_tuning(struct mmc_card *card)
 	return mmc_execute_tuning(card);
 }
 
+static void mmc_ffu_vh_update_cid_prv(struct mmc_host *host, struct mmc_card *card, u32 *cid)
+{
+	u8 raw_prv, prv;
+
+	raw_prv = (card->raw_cid[2] >> 16) & 0xff;
+	prv = (cid[2] >> 16) & 0xff;
+	if (unlikely((card->csd.mmca_vsn >= 2) && (raw_prv != prv))) {
+		pr_info("%s:(FFU) raw prv %x, prv %x\n", mmc_hostname(card->host),
+			raw_prv, prv);
+		card->raw_cid[2] &= 0xff00ffff;
+		card->raw_cid[2] |= prv << 16;
+
+		card->cid.prv = prv;
+	}
+}
+
 /*
  * Handle the detection and initialisation of a card.
  *
@@ -1566,7 +1582,6 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	u32 rocr;
 
 	WARN_ON(!host->claimed);
-
 	/* Set correct bus mode for MMC before attempting init */
 	if (!mmc_host_is_spi(host))
 		mmc_set_bus_mode(host, MMC_BUSMODE_OPENDRAIN);
@@ -1602,6 +1617,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		goto err;
 
 	if (oldcard) {
+		mmc_ffu_vh_update_cid_prv(host, oldcard, cid);
 		if (memcmp(cid, oldcard->raw_cid, sizeof(cid)) != 0) {
 			pr_debug("%s: Perhaps the card was replaced\n",
 				mmc_hostname(host));
@@ -1625,12 +1641,6 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		card->rca = 1;
 		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
 	}
-
-	/*
-	 * Call the optional HC's init_card function to handle quirks.
-	 */
-	if (host->ops->init_card)
-		host->ops->init_card(host, card);
 
 	/*
 	 * For native busses:  set card RCA and quit open drain mode.
@@ -1763,6 +1773,12 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		card->erase_arg = MMC_ERASE_ARG;
 
 	/*
+	 * Set power on write protect
+	 */
+	if (host->ops->init_card)
+		host->ops->init_card(host, card);
+
+	/*
 	 * Select timing interface
 	 */
 	err = mmc_select_timing(card);
@@ -1791,6 +1807,10 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 * Choose the power class with selected bus interface
 	 */
 	mmc_select_powerclass(card);
+
+#ifdef CONFIG_MMC_SPRD_MMCHEALTH
+	mmc_health(card);
+#endif
 
 	/*
 	 * Enable HPI feature (if supported)

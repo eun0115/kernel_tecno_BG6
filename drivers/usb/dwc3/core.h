@@ -13,6 +13,7 @@
 
 #include <linux/device.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/ioport.h>
 #include <linux/list.h>
 #include <linux/bitops.h>
@@ -164,6 +165,12 @@
 #define DWC3_OEVT		0xcc08
 #define DWC3_OEVTEN		0xcc0C
 #define DWC3_OSTS		0xcc10
+
+/* eye diagram */
+#define LCSR_TX_DEEMPH		0xd060
+#define LCSR_TX_DEEMPH_1	0xd064
+#define LCSR_TX_DEEMPH_2	0xd068
+#define LCSR_TX_DEEMPH_3	0xd06c
 
 /* Bit fields */
 
@@ -942,6 +949,7 @@ struct dwc3_scratchpad_array {
  * @scratch_addr: dma address of scratchbuf
  * @ep0_in_setup: one control transfer is completed and enter setup phase
  * @lock: for synchronizing
+ * @mutex: for mode switching
  * @dev: pointer to our struct device
  * @sysdev: pointer to the DMA-capable device
  * @xhci: pointer to our xHCI child
@@ -1077,6 +1085,9 @@ struct dwc3 {
 	/* device lock */
 	spinlock_t		lock;
 
+	/* mode switching lock */
+	struct mutex            mutex;
+
 	struct device		*dev;
 	struct device		*sysdev;
 
@@ -1084,6 +1095,7 @@ struct dwc3 {
 	struct resource		xhci_resources[DWC3_XHCI_RESOURCES_NUM];
 
 	struct dwc3_event_buffer *ev_buf;
+	struct dwc3_event_buffer **ev_bufs_ex;
 	struct dwc3_ep		*eps[DWC3_ENDPOINTS_NUM];
 
 	struct usb_gadget	gadget;
@@ -1105,6 +1117,8 @@ struct dwc3 {
 	struct ulpi		*ulpi;
 	bool			ulpi_ready;
 
+	struct usb_phy		*pam;
+
 	void __iomem		*regs;
 	size_t			regs_size;
 
@@ -1124,6 +1138,7 @@ struct dwc3 {
 	u32			desired_otg_role;
 	bool			otg_restart_host;
 	u32			nr_scratch;
+	u32			num_ev_bufs_ex;
 	u32			u1u2;
 	u32			maximum_speed;
 
@@ -1228,6 +1243,7 @@ struct dwc3 {
 	unsigned		dis_start_transfer_quirk:1;
 	unsigned		usb3_lpm_capable:1;
 	unsigned		usb2_lpm_disable:1;
+	unsigned		usb2_gadget_lpm_disable:1;
 
 	unsigned		disable_scramble_quirk:1;
 	unsigned		u2exit_lfps_quirk:1;

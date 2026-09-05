@@ -27,6 +27,10 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/spinlock.h>
+#include <linux/kthread.h>
+#include <linux/fsnotify.h>
+#include <linux/backlight.h>
+#include <uapi/linux/sched/types.h>
 #include <dt-bindings/input/gpio-keys.h>
 
 struct gpio_button_data {
@@ -344,14 +348,156 @@ static DEVICE_ATTR(disabled_switches, S_IWUSR | S_IRUGO,
 		   gpio_keys_show_disabled_switches,
 		   gpio_keys_store_disabled_switches);
 
+struct screen_onoff_checker {
+	struct device *dev;
+	struct mutex lock;
+	struct task_struct *task;
+	struct backlight_device *bl_dev;
+	struct device_node *pnode;
+	wait_queue_head_t wait_q;
+	char uevent[2][32];
+	unsigned int seq;
+	unsigned long press_jiffies;
+};
+
+static struct screen_onoff_checker timeout_checker;
+
+// Only for debug
+static ssize_t timeout_event_show(struct device *dev,
+				  struct device_attribute *attr,
+				  char *buf)
+{
+	ssize_t ret;
+
+	mutex_lock(&timeout_checker.lock);
+	ret = snprintf(buf, sizeof(timeout_checker.uevent), "%s %s",
+		       timeout_checker.uevent[0], timeout_checker.uevent[1]);
+	mutex_unlock(&timeout_checker.lock);
+	return ret;
+}
+
+static DEVICE_ATTR_RO(timeout_event);
+
 static struct attribute *gpio_keys_attrs[] = {
 	&dev_attr_keys.attr,
 	&dev_attr_switches.attr,
 	&dev_attr_disabled_keys.attr,
 	&dev_attr_disabled_switches.attr,
+	&dev_attr_timeout_event.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(gpio_keys);
+
+static int screen_onoff_checker_thread(void *data)
+{
+	struct sched_param param = {.sched_priority = 50};
+	struct backlight_device *bl_dev;
+	unsigned int last_seq, loop, last_jiffies;
+	bool screen_last, screen_now, long_pressed;
+	int brightness;
+	char *envp[3] = {NULL, NULL, NULL};
+
+	envp[0] = timeout_checker.uevent[0];
+	envp[1] = timeout_checker.uevent[1];
+
+	sched_setscheduler(current, SCHED_RR, &param);
+
+	bl_dev = timeout_checker.bl_dev;
+
+	pr_err("[%s] before enter while loop\n", __func__);
+	while (!kthread_should_stop()) {
+		pr_err("[%s] wait next powerkey\n", __func__);
+		// read seq without lock for fast access
+		last_seq = timeout_checker.seq;
+		last_jiffies = timeout_checker.press_jiffies;
+		long_pressed = false;
+		wait_event_interruptible(timeout_checker.wait_q, (timeout_checker.seq != last_seq));
+
+		brightness = bl_dev->props.brightness;
+		screen_last = (brightness == 0);
+		screen_now = screen_last;
+		pr_err("[%s] wakeup by seq:%d, brightness:%d\n",
+			__func__, timeout_checker.seq, brightness);
+
+		// check brightness for max 5000ms
+		loop = 0;
+		while (screen_now == screen_last && loop <= 100) {
+			mdelay(50);
+			brightness = bl_dev->props.brightness;
+			if (last_jiffies == timeout_checker.press_jiffies && loop >= 10) {
+				long_pressed = true;
+			}
+			screen_now = (brightness == 0);
+			loop++;
+			pr_err("[%s] brightness:%d\n", __func__, brightness);
+		}
+
+		if (loop > 100) {
+			mutex_lock(&timeout_checker.lock);
+			snprintf(envp[0], 32,
+				 "TIMEOUT=SCREEN_%s", screen_last ? "ON" : "OFF", long_pressed ? "_L" : "" );
+			snprintf(envp[1], 32, "SEQ=%d", timeout_checker.seq);
+			mutex_unlock(&timeout_checker.lock);
+			pr_err("[%s] report screen onoff timeout event:%s %s\n",
+				__func__, envp[0], envp[1]);
+
+			// notify user space the new event
+			if ( brightness > 0 && long_pressed == true) {
+				pr_err("screen is light and long pressed happen.\n");
+			} else {
+				kobject_uevent_env(&timeout_checker.dev->kobj, KOBJ_CHANGE, envp);
+			}
+		}
+	}
+
+	mutex_lock(&timeout_checker.lock);
+	timeout_checker.task = NULL;
+	mutex_unlock(&timeout_checker.lock);
+
+	pr_err("[%s] exit!\n", __func__);
+	return 0;
+}
+
+void wakeup_screen_onoff_checker(void)
+{
+	struct task_struct *task;
+	struct device_node *bl_np;
+
+	if (!timeout_checker.bl_dev && timeout_checker.pnode) {
+		bl_np = of_parse_phandle(timeout_checker.pnode, "sprd,backlight", 0);
+		if (bl_np)
+			timeout_checker.bl_dev = of_find_backlight_by_node(bl_np);
+	}
+
+	if (!timeout_checker.bl_dev) {
+		pr_err("[%s] bl_dev is null, skip check, pnode:%p, bl_np:%p!!\n",
+			__func__, timeout_checker.pnode, bl_np);
+		return;
+	}
+
+	mutex_lock(&timeout_checker.lock);
+	task = timeout_checker.task;
+	mutex_unlock(&timeout_checker.lock);
+
+	if (!task) {
+		const char *name = "kthread-sceenonoff-checker";
+
+		task = kthread_run(screen_onoff_checker_thread,
+				     NULL,
+				     name);
+		if (IS_ERR(task)) {
+			pr_err("[%s] fail to create %s.\n", __func__, name);
+			task = NULL;
+		}
+	}
+
+	mutex_lock(&timeout_checker.lock);
+	timeout_checker.seq++;
+	timeout_checker.task = task;
+	mutex_unlock(&timeout_checker.lock);
+
+	wake_up(&timeout_checker.wait_q);
+}
 
 static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 {
@@ -372,6 +518,13 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 			input_event(input, type, button->code, button->value);
 	} else {
 		input_event(input, type, *bdata->code, state);
+#ifdef CONFIG_SPRD_DEBUG
+		pr_err("[%s] input_event: type:%d, code:%d, value:%d\n",
+			__func__, type, *bdata->code, state);
+		// trigger screen onoff checker when powerkey pressed
+		if (*bdata->code == 116 && state == 1)
+			wakeup_screen_onoff_checker();
+#endif
 	}
 	input_sync(input);
 }
@@ -755,6 +908,7 @@ gpio_keys_get_devtree_pdata(struct device *dev)
 	return pdata;
 }
 
+/* check if screen on/off timeout */
 static const struct of_device_id gpio_keys_of_match[] = {
 	{ .compatible = "gpio-keys", },
 	{ },
@@ -770,6 +924,18 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	struct input_dev *input;
 	int i, error;
 	int wakeup = 0;
+#ifdef CONFIG_SPRD_DEBUG
+	struct device_node *pnode = pdev->dev.of_node;
+	struct device_node *bl_np;
+
+	bl_np = of_parse_phandle(pnode, "sprd,backlight", 0);
+	timeout_checker.pnode = pnode;
+	pr_err("[%s] checker: bl_np=%p\n", __func__, bl_np);
+	if (bl_np) {
+		timeout_checker.bl_dev = of_find_backlight_by_node(bl_np);
+		pr_err("[%s] checker: bl_dev=%p\n", __func__, timeout_checker.bl_dev);
+	}
+#endif
 
 	if (!pdata) {
 		pdata = gpio_keys_get_devtree_pdata(dev);
@@ -857,10 +1023,18 @@ static int gpio_keys_probe(struct platform_device *pdev)
 
 	device_init_wakeup(dev, wakeup);
 
+#ifdef CONFIG_SPRD_DEBUG
+	timeout_checker.dev = dev;
+	timeout_checker.task = NULL;
+	timeout_checker.bl_dev = NULL;
+	timeout_checker.seq = 0;
+	init_waitqueue_head(&timeout_checker.wait_q);
+	wakeup_screen_onoff_checker();
+#endif
+
 	return 0;
 }
 
-static int __maybe_unused
 gpio_keys_button_enable_wakeup(struct gpio_button_data *bdata)
 {
 	int error;

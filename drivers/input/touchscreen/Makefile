@@ -110,3 +110,9 @@ obj-$(CONFIG_TOUCHSCREEN_COLIBRI_VF50)	+= colibri-vf50-ts.o
 obj-$(CONFIG_TOUCHSCREEN_ROHM_BU21023)	+= rohm_bu21023.o
 obj-$(CONFIG_TOUCHSCREEN_RASPBERRYPI_FW)	+= raspberrypi-ts.o
 obj-$(CONFIG_TOUCHSCREEN_IQS5XX)	+= iqs5xx.o
+
+obj-$(CONFIG_TOUCHSCREEN_HIMAX_CHIPSET) += hxchipset/
+obj-$(CONFIG_TOUCHSCREEN_OMNIVISION_TCM) += omnivision_tcm/
+obj-$(CONFIG_TOUCHSCREEN_FOCALTECH_SPI) += focaltech_spi/
+obj-$(CONFIG_TOUCHSCREEN_FTS) += focaltech_touch/
+obj-$(CONFIG_TOUCHSCREEN_CHIPONE) += chipone_icnl__9916c/

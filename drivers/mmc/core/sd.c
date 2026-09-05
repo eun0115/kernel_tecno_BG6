@@ -365,6 +365,7 @@ int mmc_sd_switch_hs(struct mmc_card *card)
 {
 	int err;
 	u8 *status;
+	int retries;
 
 	if (card->scr.sda_vsn < SCR_SPEC_VER_1)
 		return 0;
@@ -382,7 +383,14 @@ int mmc_sd_switch_hs(struct mmc_card *card)
 	if (!status)
 		return -ENOMEM;
 
-	err = mmc_sd_switch(card, 1, 0, 1, status);
+	for (retries = 0; retries < 10; retries++) {
+		err = mmc_sd_switch(card, 1, 0, 1, status);
+		if (!err)
+			break;
+	}
+
+	pr_warn("%s: Retry switching card into high-speed mode, retries = %d\n",
+			mmc_hostname(card->host), retries);
 	if (err)
 		goto out;
 
@@ -1078,6 +1086,16 @@ retry:
 		 */
 		mmc_set_clock(host, mmc_sd_get_max_clock(card));
 
+		if (card->host->ios.timing == MMC_TIMING_SD_HS) {
+			err = card->host->ops->execute_tuning(card->host,
+				MMC_SET_BLOCKLEN);
+			if (err) {
+				pr_err("%s: high-speed cmd tuning failed\n",
+					mmc_hostname(card->host));
+				goto free_card;
+			}
+		}
+
 		/*
 		 * Switch to wider bus (if supported).
 		 */
@@ -1088,6 +1106,16 @@ retry:
 				goto free_card;
 
 			mmc_set_bus_width(host, MMC_BUS_WIDTH_4);
+		}
+
+		if (card->host->ios.timing == MMC_TIMING_SD_HS) {
+			err = card->host->ops->execute_tuning(card->host,
+				MMC_SEND_TUNING_BLOCK);
+			if (err) {
+				pr_err("%s: high-speed data and cmd tuning failed\n",
+					mmc_hostname(card->host));
+				goto free_card;
+			}
 		}
 	}
 

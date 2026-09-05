@@ -159,6 +159,20 @@ static unsigned long __init_memblock memblock_addrs_overlap(phys_addr_t base1, p
 	return ((base1 < (base2 + size2)) && (base2 < (base1 + size1)));
 }
 
+#ifdef CONFIG_SPRD_MEM_OVERLAY_CHECK
+static void memblock_reserved_overlaps_check(char *type_name, struct memblock_region *old_regions,
+					phys_addr_t base, phys_addr_t size)
+{
+	if (!strcmp(type_name, "reserved")) {
+		pr_err("memblock overlap! base:[%#016llx - %#016llx], overlap:[%#016llx - %#016llx]",
+						(unsigned long long)old_regions->base,
+						(unsigned long long)old_regions->base + old_regions->size - 1,
+						(unsigned long long)base,
+						(unsigned long long)base + size - 1);
+	}
+}
+#endif
+
 bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 					phys_addr_t base, phys_addr_t size)
 {
@@ -168,8 +182,12 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 
 	for (i = 0; i < type->cnt; i++)
 		if (memblock_addrs_overlap(base, size, type->regions[i].base,
-					   type->regions[i].size))
+					   type->regions[i].size)) {
+#ifdef CONFIG_SPRD_MEM_OVERLAY_CHECK
+			memblock_reserved_overlaps_check(type->name, &type->regions[i], base, size);
+#endif
 			break;
+		}
 	return i < type->cnt;
 }
 
@@ -573,6 +591,13 @@ int __init_memblock memblock_add_range(struct memblock_type *type,
 		type->total_size = size;
 		return 0;
 	}
+#ifdef CONFIG_SPRD_MEM_OVERLAY_CHECK
+	if (memblock_overlaps_region(&memblock.reserved, base, size)) {
+		panic("Detected Overlay Region: [%#016llx - %#016llx]\n",
+			(unsigned long long)base,
+			(unsigned long long)base + size - 1);
+	}
+#endif
 repeat:
 	/*
 	 * The following is executed twice.  Once with %false @insert and

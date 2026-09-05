@@ -376,6 +376,15 @@ static inline void mmc_wait_ongoing_tfr_cmd(struct mmc_host *host)
 		wait_for_completion(&ongoing_mrq->cmd_completion);
 }
 
+static void mmc_status_fixup(struct mmc_host *host, bool mask)
+{
+	if (host->index == 0) {
+		typedef void (*func)(bool);
+		if (host->cqe_ops->android_kabi_reserved2)
+			((func)(host->cqe_ops->android_kabi_reserved2))(mask);
+	}
+}
+
 static int __mmc_start_req(struct mmc_host *host, struct mmc_request *mrq)
 {
 	int err;
@@ -384,7 +393,8 @@ static int __mmc_start_req(struct mmc_host *host, struct mmc_request *mrq)
 
 	init_completion(&mrq->completion);
 	mrq->done = mmc_wait_done;
-
+	if (host->index == 0 && mrq->cmd->retries == 0)
+		mrq->cmd->retries = 1;//mmc_status_fixup(host, true);
 	err = mmc_start_request(host, mrq);
 	if (err) {
 		mrq->cmd->error = err;
@@ -429,6 +439,7 @@ void mmc_wait_for_req_done(struct mmc_host *host, struct mmc_request *mrq)
 
 		pr_debug("%s: req failed (CMD%u): %d, retrying...\n",
 			 mmc_hostname(host), cmd->opcode, cmd->error);
+		mmc_status_fixup(host, true);
 		cmd->retries--;
 		cmd->error = 0;
 		__mmc_start_request(host, mrq);
@@ -536,6 +547,19 @@ void mmc_cqe_post_req(struct mmc_host *host, struct mmc_request *mrq)
 		host->cqe_ops->cqe_post_req(host, mrq);
 }
 EXPORT_SYMBOL(mmc_cqe_post_req);
+
+/**
+ *	mmc_cqe_is_busy - If CQE is busy or not
+ *	@host: MMC host
+ */
+bool mmc_cqe_is_busy(struct mmc_host *host, bool hsq_busy)
+{
+	typedef bool (*func)(struct mmc_host *);
+	if (host->cqe_ops->android_kabi_reserved1)
+		return ((func)(host->cqe_ops->android_kabi_reserved1))(host);
+	else
+		return hsq_busy;
+}
 
 /* Arbitrary 1 second timeout */
 #define MMC_CQE_RECOVERY_TIMEOUT	1000

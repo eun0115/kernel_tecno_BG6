@@ -39,6 +39,7 @@
 #include "blk-pm.h"
 #include "blk-stat.h"
 #include "blk-mq-sched.h"
+#include "blk-ioprio.h"
 #include "blk-rq-qos.h"
 
 static void blk_mq_poll_stats_start(struct request_queue *q);
@@ -689,7 +690,12 @@ void blk_mq_start_request(struct request *rq)
 		rq->stats_sectors = blk_rq_sectors(rq);
 		rq->rq_flags |= RQF_STATS;
 		rq_qos_issue(q, rq);
+#if defined(CONFIG_SPRD_DEBUG)
+	} else
+		rq->io_start_time_ns = ktime_get_ns();
+#else
 	}
+#endif
 
 	WARN_ON_ONCE(blk_mq_rq_state(rq) != MQ_RQ_IDLE);
 
@@ -2028,6 +2034,14 @@ static void blk_mq_clear_rq_mapping(struct blk_mq_tag_set *set,
 	spin_unlock_irqrestore(&drv_etags->lock, flags);
 }
 
+static void bio_set_ioprio(struct bio *bio)
+{
+	/* Nobody set ioprio so far? Initialize it based on task's nice value */
+	if (IOPRIO_PRIO_CLASS(bio->bi_ioprio) == IOPRIO_CLASS_NONE)
+		bio->bi_ioprio = get_current_ioprio();
+	blkcg_set_ioprio(bio);
+}
+
 static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 {
 	const int is_sync = op_is_sync(bio->bi_opf);
@@ -2046,6 +2060,7 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (!bio_integrity_prep(bio))
 		return BLK_QC_T_NONE;
 
+	bio_set_ioprio(bio);
 	if (!is_flush_fua && !blk_queue_nomerges(q) &&
 	    blk_attempt_plug_merge(q, bio, nr_segs, &same_queue_rq))
 		return BLK_QC_T_NONE;

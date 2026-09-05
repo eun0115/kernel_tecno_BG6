@@ -147,6 +147,12 @@ static void mmc_mq_recovery_handler(struct work_struct *work)
 
 	mq->in_recovery = true;
 
+	if (host->index == 0) {
+		typedef void (*func)(bool);
+		if (host->cqe_ops->android_kabi_reserved2)
+                    ((func)(host->cqe_ops->android_kabi_reserved2))(true);
+	}
+
 	if (mq->use_cqe && !host->hsq_enabled)
 		mmc_blk_cqe_recovery(mq);
 	else
@@ -185,6 +191,8 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 	max_discard = mmc_calc_max_discard(card);
 	if (!max_discard)
 		return;
+
+	max_discard = UINT_MAX;
 
 	blk_queue_flag_set(QUEUE_FLAG_DISCARD, q);
 	blk_queue_max_discard_sectors(q, max_discard);
@@ -280,11 +288,12 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 		}
 		break;
 	case MMC_ISSUE_ASYNC:
-		/*
-		 * For MMC host software queue, we only allow 2 requests in
-		 * flight to avoid a long latency.
+		/* If cqe_ops registered with cqe_is_busy, then use cqe
+		 * to obtain busy state, else we use orignal condition to
+		 * obtain busy state.
 		 */
-		if (host->hsq_enabled && mq->in_flight[issue_type] > 2) {
+		if (mq->use_cqe && mmc_cqe_is_busy(host,
+			host->hsq_enabled && mq->in_flight[issue_type] > 2)) {
 			spin_unlock_irq(&mq->lock);
 			return BLK_STS_RESOURCE;
 		}
@@ -434,7 +443,7 @@ int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card)
 
 	mq->card = card;
 	mq->use_cqe = host->cqe_enabled;
-	
+
 	spin_lock_init(&mq->lock);
 
 	memset(&mq->tag_set, 0, sizeof(mq->tag_set));

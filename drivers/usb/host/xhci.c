@@ -5007,7 +5007,7 @@ static int xhci_enable_usb3_lpm_timeout(struct usb_hcd *hcd,
 	 * information about their timeout algorithm.
 	 */
 	if (!xhci || !(xhci->quirks & XHCI_LPM_SUPPORT) ||
-			!xhci->devs[udev->slot_id])
+			!xhci->devs[udev->slot_id] || !udev->parent)
 		return USB3_LPM_DISABLED;
 
 	/* If connected to root port then check port can handle lpm */

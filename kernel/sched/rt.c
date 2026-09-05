@@ -14,6 +14,15 @@ int sysctl_sched_rr_timeslice = (MSEC_PER_SEC / HZ) * RR_TIMESLICE;
 /* More than 4 hours if BW_SHIFT equals 20. */
 static const u64 max_rt_runtime = MAX_BW;
 
+#ifdef CONFIG_SMP
+static unsigned int capacity_margin = 1280;
+
+static unsigned long capacity_of(int cpu)
+{
+	return cpu_rq(cpu)->cpu_capacity;
+}
+#endif
+
 static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun);
 
 struct rt_bandwidth def_rt_bandwidth;
@@ -116,8 +125,6 @@ static void destroy_rt_bandwidth(struct rt_bandwidth *rt_b)
 {
 	hrtimer_cancel(&rt_b->rt_period_timer);
 }
-
-#define rt_entity_is_task(rt_se) (!(rt_se)->my_q)
 
 static inline struct task_struct *rt_task_of(struct sched_rt_entity *rt_se)
 {
@@ -231,8 +238,6 @@ err:
 
 #else /* CONFIG_RT_GROUP_SCHED */
 
-#define rt_entity_is_task(rt_se) (1)
-
 static inline struct task_struct *rt_task_of(struct sched_rt_entity *rt_se)
 {
 	return container_of(rt_se, struct task_struct, rt);
@@ -272,7 +277,12 @@ static void pull_rt_task(struct rq *this_rq);
 static inline bool need_pull_rt_task(struct rq *rq, struct task_struct *prev)
 {
 	/* Try to pull RT tasks here if we lower this rq's prio */
+#ifdef CONFIG_SPRD_CORE_CTL
+	return rq->rt.highest_prio.curr > prev->prio &&
+	       !cpu_isolated(cpu_of(rq));
+#else
 	return rq->rt.highest_prio.curr > prev->prio;
+#endif
 }
 
 static inline int rt_overloaded(struct rq *rq)
@@ -1493,7 +1503,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	       unlikely(rt_task(curr)) &&
 	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio);
 
-	if (test || !rt_task_fits_capacity(p, cpu)) {
+	if (sched_energy_enabled() || test || !rt_task_fits_capacity(p, cpu)) {
 		int target = find_lowest_rq(p);
 
 		/*
@@ -1748,6 +1758,62 @@ static int find_lowest_rq(struct task_struct *task)
 
 	if (!ret)
 		return -1; /* No targets found */
+
+	if (sched_energy_enabled()) {
+		int i;
+		struct cpumask tmp_mask;
+
+#ifdef CONFIG_SPRD_CORE_CTL
+		cpumask_t allowed_mask;
+
+		cpumask_andnot(&allowed_mask, &min_cap_cpu_mask,
+				cpu_isolated_mask);
+		cpumask_and(&tmp_mask, lowest_mask, &allowed_mask);
+#else
+		cpumask_and(&tmp_mask, lowest_mask, &min_cap_cpu_mask);
+#endif
+
+		if (cpumask_weight(&tmp_mask)) {
+			unsigned long total_util = 0, total_cap = 0;
+
+			for_each_cpu(i, &tmp_mask) {
+				struct rq *rq = cpu_rq(i);
+
+				total_util += cpu_util_cfs(rq) + cpu_util_rt(rq);
+				total_cap += capacity_orig_of(i);
+			}
+
+			/*
+			 * The margin used when comparing utilization
+			 * with CPU capacity.
+			 *
+			 * (default: ~20%)
+			 */
+			if (total_util * capacity_margin < total_cap * 1024)
+				cpumask_copy(lowest_mask, &tmp_mask);
+		}
+
+#ifdef CONFIG_SPRD_CORE_CTL
+		/* fast path for prev_cpu */
+		if (cpumask_test_cpu(cpu, lowest_mask) && idle_cpu(cpu) &&
+		    !cpu_isolated(cpu))
+			return cpu;
+
+		for_each_cpu(i, lowest_mask) {
+			if (idle_cpu(i) && !cpu_isolated(i))
+				return i;
+		}
+#else
+		/* fast path for prev_cpu */
+		if (cpumask_test_cpu(cpu, lowest_mask) && idle_cpu(cpu))
+			return cpu;
+
+		for_each_cpu(i, lowest_mask) {
+			if (idle_cpu(i))
+				return i;
+		}
+#endif
+	}
 
 	/*
 	 * At this point we have built a mask of CPUs representing the
@@ -2192,6 +2258,25 @@ static void pull_rt_task(struct rq *this_rq)
 		    this_rq->rt.highest_prio.curr)
 			continue;
 
+		if (sched_energy_enabled()) {
+			unsigned long this_util = cpu_util_cfs(cpu_rq(this_cpu));
+			unsigned long util = cpu_util_cfs(cpu_rq(cpu));
+			unsigned long this_orig = capacity_orig_of(this_cpu);
+			unsigned long cap_orig = capacity_orig_of(cpu);
+
+			/* If local cpu is overutilized, abort pull */
+			if (this_util * capacity_margin >
+			    capacity_of(this_cpu) * 1024)
+				break;
+
+			/* Local cpu is the bigger one and the src cpu is
+			 * not overutilized, drop pull from src cpu
+			 */
+			if (this_orig > cap_orig &&
+			    util * capacity_margin < capacity_of(cpu) * 1024)
+				continue;
+		}
+
 		/*
 		 * We can potentially drop this_rq's lock in
 		 * double_lock_balance, and another CPU could
@@ -2296,9 +2381,14 @@ static void switched_from_rt(struct rq *rq, struct task_struct *p)
 	 * we may need to handle the pulling of RT tasks
 	 * now.
 	 */
+#ifdef CONFIG_SPRD_CORE_CTL
+	if (!task_on_rq_queued(p) || rq->rt.rt_nr_running ||
+	    cpu_isolated(cpu_of(rq)))
+		return;
+#else
 	if (!task_on_rq_queued(p) || rq->rt.rt_nr_running)
 		return;
-
+#endif
 	rt_queue_pull_task(rq);
 }
 
@@ -2427,6 +2517,8 @@ static void task_tick_rt(struct rq *rq, struct task_struct *p, int queued)
 
 	update_curr_rt(rq);
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 1);
+	/* Kick cpufreq (see the comment in kernel/sched/sched.h). */
+	cpufreq_update_util(rq, 0);
 
 	watchdog(rq, p);
 
