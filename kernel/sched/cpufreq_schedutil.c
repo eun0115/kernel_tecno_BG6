@@ -62,11 +62,6 @@ struct sugov_cpu {
 
 	unsigned long		bw_dl;
 	unsigned long		max;
-
-	/* The field below is for single-CPU policies only: */
-#ifdef CONFIG_NO_HZ_COMMON
-	unsigned long		saved_idle_calls;
-#endif
 };
 
 static DEFINE_PER_CPU(struct sugov_cpu, sugov_cpu);
@@ -133,7 +128,6 @@ static void sugov_fast_switch(struct sugov_policy *sg_policy, u64 time,
 			      unsigned int next_freq)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	int cpu;
 
 	if (!sugov_update_next_freq(sg_policy, time, next_freq))
 		return;
@@ -143,11 +137,6 @@ static void sugov_fast_switch(struct sugov_policy *sg_policy, u64 time,
 		return;
 
 	policy->cur = next_freq;
-
-	if (trace_cpu_frequency_enabled()) {
-		for_each_cpu(cpu, policy->cpus)
-			trace_cpu_frequency(next_freq, cpu);
-	}
 }
 
 static void sugov_slack_timer_setup(struct sugov_policy *sg_policy,
@@ -212,6 +201,7 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int freq = arch_scale_freq_invariant() ?
 				policy->cpuinfo.max_freq : policy->cur;
+	unsigned int idx, l_freq, h_freq;
 	unsigned long next_freq = 0;
 
 	trace_android_vh_map_util_freq(util, freq, max, &next_freq);
@@ -237,7 +227,21 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 
 	sg_policy->need_freq_update = false;
 	sg_policy->cached_raw_freq = freq;
-	return cpufreq_driver_resolve_freq(policy, freq);
+	l_freq = cpufreq_driver_resolve_freq(policy, freq);
+	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
+	h_freq = policy->freq_table[idx].frequency;
+	h_freq = clamp(h_freq, policy->min, policy->max);
+	if (l_freq <= h_freq || l_freq == policy->min)
+		return l_freq;
+
+	/*
+	 * Use the frequency step below if the calculated frequency is <20%
+	 * higher than it.
+	 */
+	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
+		return h_freq;
+
+	return l_freq;
 }
 
 /*
@@ -481,19 +485,6 @@ static unsigned long sugov_iowait_apply(struct sugov_cpu *sg_cpu, u64 time,
 	return max(boost, util);
 }
 
-#ifdef CONFIG_NO_HZ_COMMON
-static bool sugov_cpu_is_busy(struct sugov_cpu *sg_cpu)
-{
-	unsigned long idle_calls = tick_nohz_get_idle_calls_cpu(sg_cpu->cpu);
-	bool ret = idle_calls == sg_cpu->saved_idle_calls;
-	ret = false;
-	sg_cpu->saved_idle_calls = idle_calls;
-	return ret;
-}
-#else
-static inline bool sugov_cpu_is_busy(struct sugov_cpu *sg_cpu) { return false; }
-#endif /* CONFIG_NO_HZ_COMMON */
-
 /*
  * Make sugov_should_update_freq() ignore the rate limit when DL
  * has increased the utilization.
@@ -511,7 +502,6 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	unsigned long util, max;
 	unsigned int next_f;
-	bool busy;
 	unsigned int cached_freq = sg_policy->cached_raw_freq;
 
 	sugov_iowait_boost(sg_cpu, time, flags);
@@ -522,24 +512,10 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	if (!sugov_should_update_freq(sg_policy, time))
 		return;
 
-	/* Limits may have changed, don't skip frequency update */
-	busy = !sg_policy->need_freq_update && sugov_cpu_is_busy(sg_cpu);
-
 	util = sugov_get_util(sg_cpu);
 	max = sg_cpu->max;
 	util = sugov_iowait_apply(sg_cpu, time, util, max);
 	next_f = get_next_freq(sg_policy, util, max);
-	/*
-	 * Do not reduce the frequency if the CPU has not been idle
-	 * recently, as the reduction is likely to be premature then.
-	 */
-	if (busy && next_f < sg_policy->next_freq) {
-		next_f = sg_policy->next_freq;
-
-		/* Restore cached freq as next_freq has changed */
-		sg_policy->cached_raw_freq = cached_freq;
-	}
-
 	/*
 	 * This code runs under rq->lock for the target CPU, so it won't run
 	 * concurrently on two different CPUs for the same target and it is not

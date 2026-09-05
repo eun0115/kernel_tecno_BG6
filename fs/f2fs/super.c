@@ -1910,7 +1910,7 @@ static void default_options(struct f2fs_sb_info *sbi)
 	F2FS_OPTION(sbi).inline_xattr_size = DEFAULT_INLINE_XATTR_ADDRS;
 	F2FS_OPTION(sbi).whint_mode = WHINT_MODE_OFF;
 	F2FS_OPTION(sbi).alloc_mode = ALLOC_MODE_DEFAULT;
-	F2FS_OPTION(sbi).fsync_mode = FSYNC_MODE_POSIX;
+	F2FS_OPTION(sbi).fsync_mode = FSYNC_MODE_NOBARRIER;
 	F2FS_OPTION(sbi).s_resuid = make_kuid(&init_user_ns, F2FS_DEF_RESUID);
 	F2FS_OPTION(sbi).s_resgid = make_kgid(&init_user_ns, F2FS_DEF_RESGID);
 	F2FS_OPTION(sbi).compress_algorithm = COMPRESS_LZ4;
@@ -4211,6 +4211,15 @@ reset_checkpoint:
 		f2fs_info(sbi, "Try to recover %dth superblock, ret: %d",
 			  sbi->valid_super_block ? 1 : 2, err);
 	}
+
+	/* update extension list */
+	f2fs_update_extension_list(sbi, "db", true, true);
+ 	f2fs_update_extension_list(sbi, "db-shm", true, true);
+ 	f2fs_update_extension_list(sbi, "db-wal", true, true);
+ 	f2fs_update_extension_list(sbi, "sqlite", true, true);
+ 	f2fs_update_extension_list(sbi, "android", true, true);
+	f2fs_update_extension_list(sbi, "obb", true, true);
+	f2fs_update_extension_list(sbi, "pak", true, true);
 
 	f2fs_join_shrinker(sbi);
 

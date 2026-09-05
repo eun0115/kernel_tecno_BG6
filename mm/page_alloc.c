@@ -345,21 +345,8 @@ compound_page_dtor * const compound_page_dtors[] = {
  * tuned according to the amount of memory in the system.
  */
 int min_free_kbytes = 1024;
-int user_min_free_kbytes = -1;
-#ifdef CONFIG_DISCONTIGMEM
-/*
- * DiscontigMem defines memory ranges as separate pg_data_t even if the ranges
- * are not on separate NUMA nodes. Functionally this works but with
- * watermark_boost_factor, it can reclaim prematurely as the ranges can be
- * quite small. By default, do not boost watermarks on discontigmem as in
- * many cases very high-order allocations like THP are likely to be
- * unsupported and the premature reclaim offsets the advantage of long-term
- * fragmentation avoidance.
- */
+int user_min_free_kbytes = 65536;
 int watermark_boost_factor __read_mostly;
-#else
-int watermark_boost_factor __read_mostly = 15000;
-#endif
 int watermark_scale_factor = 10;
 
 /*
@@ -367,7 +354,7 @@ int watermark_scale_factor = 10;
  * free memory, to make space for new workloads. Anyone can allocate
  * down to the min watermarks controlled by min_free_kbytes above.
  */
-int extra_free_kbytes = 0;
+int extra_free_kbytes = 15000;
 
 static unsigned long nr_kernel_pages __initdata;
 static unsigned long nr_all_pages __initdata;
@@ -8099,7 +8086,7 @@ void calculate_min_free_kbytes(void)
 		if (min_free_kbytes > 65536)
 			min_free_kbytes = 65536;
 	} else {
-		min_free_kbytes = user_min_free_kbytes;
+		user_min_free_kbytes = min_free_kbytes;
 		pr_warn("min_free_kbytes is not updated to %d because user defined value %d is preferred\n",
 				new_min_free_kbytes, user_min_free_kbytes);
 	}
@@ -8137,7 +8124,7 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 		return rc;
 
 	if (write) {
-		user_min_free_kbytes = min_free_kbytes;
+		min_free_kbytes = user_min_free_kbytes;
 		setup_per_zone_wmarks();
 	}
 	return 0;

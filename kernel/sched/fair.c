@@ -90,11 +90,11 @@ const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
 
 #ifdef CONFIG_SMP
 /*
- * For asym packing, by default the lower numbered CPU has higher priority.
+ * For asym packing, by default the lower max-capacity CPU has higher priority.
  */
 int __weak arch_asym_cpu_priority(int cpu)
 {
-	return -cpu;
+	return -arch_scale_cpu_capacity(cpu);
 }
 
 /*
@@ -3587,6 +3587,7 @@ static void detach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 #define UPDATE_TG	0x1
 #define SKIP_AGE_LOAD	0x2
 #define DO_ATTACH	0x4
+#define SKIP_CPUFREQ	0x8
 
 /* Update task and its cfs_rq load average */
 static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
@@ -3897,6 +3898,7 @@ static inline void update_misfit_status(struct task_struct *p, struct rq *rq)
 #define UPDATE_TG	0x0
 #define SKIP_AGE_LOAD	0x0
 #define DO_ATTACH	0x0
+#define SKIP_CPUFREQ	0x0
 
 static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se, int not_used1)
 {
@@ -4031,6 +4033,7 @@ static inline bool cfs_bandwidth_used(void);
 static void
 enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
+	int update_flags;
 	bool renorm = !(flags & ENQUEUE_WAKEUP) || (flags & ENQUEUE_MIGRATED);
 	bool curr = cfs_rq->curr == se;
 
@@ -4060,7 +4063,12 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 *     its group cfs_rq
 	 *   - Add its new weight to cfs_rq->load.weight
 	 */
-	update_load_avg(cfs_rq, se, UPDATE_TG | DO_ATTACH);
+	update_flags = UPDATE_TG | DO_ATTACH;
+
+	if (flags & DEQUEUE_IDLE)
+		update_flags |= SKIP_CPUFREQ;
+
+	update_load_avg(cfs_rq, se, update_flags);
 	update_cfs_group(se);
 	enqueue_runnable_load_avg(cfs_rq, se);
 	account_entity_enqueue(cfs_rq, se);
@@ -5471,10 +5479,13 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		flags |= DEQUEUE_SLEEP;
 	}
 
+	if (task_sleep && rq->nr_running == 1)
+		flags |= DEQUEUE_IDLE;
+
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
 
-		update_load_avg(cfs_rq, se, UPDATE_TG);
+		update_load_avg(cfs_rq, se, UPDATE_TG | (flags & DEQUEUE_IDLE));
 		update_cfs_group(se);
 
 		cfs_rq->h_nr_running--;
@@ -10345,9 +10356,20 @@ void nohz_balance_enter_idle(int cpu)
 
 	SCHED_WARN_ON(cpu != smp_processor_id());
 
-	/* If this CPU is going down, then nothing needs to be done: */
-	if (!cpu_active(cpu))
+	if (!cpu_active(cpu)) {
+		/*
+		 * A CPU can be paused while it is idle with it's tick
+		 * stopped. nohz_balance_exit_idle() should be called
+		 * from the local CPU, so it can't be called during
+		 * pause. This results in paused CPU participating in
+		 * the nohz idle balance, which should be avoided.
+		 *
+		 * When the paused CPU exits idle and enters again,
+		 * exempt the paused CPU from nohz_balance_exit_idle.
+		 */
+		nohz_balance_exit_idle(rq);
 		return;
+	}
 
 	/* Spare idle load balancing on CPUs that don't want to be disturbed: */
 	if (!housekeeping_cpu(cpu, HK_FLAG_SCHED))
@@ -11268,6 +11290,17 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
 
 	return rr_interval;
 }
+
+#ifdef CONFIG_SCHED_CASS
+#include "cass.c"
+
+/* Use CASS. A dummy wrapper ensures the replaced function is still "used". */
+static inline void *select_task_rq_fair_dummy(void)
+{
+	return (void *)select_task_rq_fair;
+}
+#define select_task_rq_fair cass_select_task_rq_fair
+#endif /* CONFIG_SCHED_CASS */
 
 /*
  * All the scheduling class methods:

@@ -62,6 +62,9 @@
 #include <linux/pid_namespace.h>
 #include <linux/security.h>
 #include <linux/spinlock.h>
+/* REKERNEL */
+#include <../rekernel/rekernel.h>
+/* REKERNEL */
 #include <linux/ratelimit.h>
 #include <linux/syscalls.h>
 #include <linux/task_work.h>
@@ -117,8 +120,7 @@ enum {
 	BINDER_DEBUG_PRIORITY_CAP           = 1U << 13,
 	BINDER_DEBUG_SPINLOCKS              = 1U << 14,
 };
-static uint32_t binder_debug_mask = BINDER_DEBUG_USER_ERROR |
-	BINDER_DEBUG_FAILED_TRANSACTION | BINDER_DEBUG_DEAD_TRANSACTION;
+static uint32_t binder_debug_mask = 0;
 module_param_named(debug_mask, binder_debug_mask, uint, 0644);
 
 char *binder_devices_param = CONFIG_ANDROID_BINDER_DEVICES;
@@ -140,11 +142,7 @@ static int binder_set_stop_on_user_error(const char *val,
 module_param_call(stop_on_user_error, binder_set_stop_on_user_error,
 	param_get_int, &binder_stop_on_user_error, 0644);
 
-#define binder_debug(mask, x...) \
-	do { \
-		if (binder_debug_mask & mask) \
-			pr_info_ratelimited(x); \
-	} while (0)
+#define binder_debug(mask, x...) do {} while (0)
 
 #define binder_user_error(x...) \
 	do { \
@@ -3080,6 +3078,20 @@ static void binder_transaction(struct binder_proc *proc,
 		target_proc = target_thread->proc;
 		target_proc->tmp_ref++;
 		binder_inner_proc_unlock(target_thread->proc);
+/* REKERNEL */
+		if (start_rekernel_server() == 0) {
+			if (target_proc
+				&& (NULL != target_proc->tsk)
+				&& (NULL != proc->tsk)
+				&& (task_uid(target_proc->tsk).val <= MAX_SYSTEM_UID)
+				&& (proc->pid != target_proc->pid)
+				&& line_is_frozen(target_proc->tsk)) {
+     				char binder_kmsg[PACKET_SIZE];
+					snprintf(binder_kmsg, sizeof(binder_kmsg), "type=Binder,bindertype=reply,oneway=0,from_pid=%d,from=%d,target_pid=%d,target=%d;", proc->pid, task_uid(proc->tsk).val, target_proc->pid, task_uid(target_proc->tsk).val);
+         			send_netlink_message(binder_kmsg, strlen(binder_kmsg));
+			}
+   		}
+/* REKERNEL */
 	} else {
 		if (tr->target.handle) {
 			struct binder_ref *ref;
@@ -3132,6 +3144,20 @@ static void binder_transaction(struct binder_proc *proc,
 			goto err_dead_binder;
 		}
 		e->to_node = target_node->debug_id;
+/* REKERNEL */
+		if (start_rekernel_server() == 0) {
+			if (target_proc
+				&& (NULL != target_proc->tsk)
+				&& (NULL != proc->tsk)
+				&& (task_uid(target_proc->tsk).val > MIN_USERAPP_UID)
+				&& (proc->pid != target_proc->pid)
+				&& line_is_frozen(target_proc->tsk)) {
+	 			char binder_kmsg[PACKET_SIZE];
+					snprintf(binder_kmsg, sizeof(binder_kmsg), "type=Binder,bindertype=transaction,oneway=%d,from_pid=%d,from=%d,target_pid=%d,target=%d;", tr->flags & TF_ONE_WAY, proc->pid, task_uid(proc->tsk).val, target_proc->pid, task_uid(target_proc->tsk).val);
+	 			send_netlink_message(binder_kmsg, strlen(binder_kmsg));
+			}
+		}
+/* REKERNEL */
 		if (security_binder_transaction(binder_get_cred(proc),
 						binder_get_cred(target_proc)) < 0) {
 			return_error = BR_FAILED_REPLY;
@@ -3312,7 +3338,7 @@ static void binder_transaction(struct binder_proc *proc,
 
 	t->buffer = binder_alloc_new_buf(&target_proc->alloc, tr->data_size,
 		tr->offsets_size, extra_buffers_size,
-		!reply && (t->flags & TF_ONE_WAY), current->tgid);
+		!reply && (t->flags & TF_ONE_WAY));
 	if (IS_ERR(t->buffer)) {
 		/*
 		 * -ESRCH indicates VMA cleared. The target is dying.

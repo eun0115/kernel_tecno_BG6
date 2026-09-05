@@ -615,10 +615,18 @@ static void dd_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	 */
 	blk_req_zone_write_unlock(rq);
 
+	LIST_HEAD(free);
+
 	prio = ioprio_class_to_prio[ioprio_class];
 
-	if (blk_mq_sched_try_insert_merge(q, rq))
-		return;
+	if (blk_mq_sched_try_insert_merge(q, rq, &free)){
+		struct request *r, *tmp;
+  		list_for_each_entry_safe(r, tmp, &free, queuelist) {
+			list_del_init(&r->queuelist);
+   			blk_mq_free_request(r);
+  		}
+  		return;
+ 	}
 
 	blk_mq_sched_request_inserted(rq);
 

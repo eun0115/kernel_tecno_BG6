@@ -231,7 +231,7 @@ static int ovt_tcm_i2c_alloc_mem(struct ovt_tcm_hcd *tcm_hcd,
 static int ovt_tcm_i2c_rmi_read(struct ovt_tcm_hcd *tcm_hcd,
 		unsigned short addr, unsigned char *data, unsigned int length)
 {
-	int retval = -EIO;
+	int retval;
 	unsigned char address;
 	unsigned int attempt;
 	struct i2c_msg msg[2];
@@ -261,8 +261,10 @@ static int ovt_tcm_i2c_rmi_read(struct ovt_tcm_hcd *tcm_hcd,
 				"Transfer attempt %d failed\n",
 				attempt + 1);
 
-		if (attempt + 1 == XFER_ATTEMPTS)
+		if (attempt + 1 == XFER_ATTEMPTS) {
+			retval = -EIO;
 			goto exit;
+		}
 
 		msleep(20);
 	}
@@ -337,7 +339,7 @@ exit:
 static int ovt_tcm_i2c_read(struct ovt_tcm_hcd *tcm_hcd, unsigned char *data,
 		unsigned int length)
 {
-	int retval = -EIO;
+	int retval;
 	unsigned int attempt;
 	struct i2c_msg msg;
 	struct i2c_client *i2c = to_i2c_client(tcm_hcd->pdev->dev.parent);
@@ -358,8 +360,10 @@ static int ovt_tcm_i2c_read(struct ovt_tcm_hcd *tcm_hcd, unsigned char *data,
 				"Transfer attempt %d failed\n",
 				attempt + 1);
 
-		if (attempt + 1 == XFER_ATTEMPTS)
+		if (attempt + 1 == XFER_ATTEMPTS) {
+			retval = -EIO;
 			goto exit;
+		}
 
 		msleep(20);
 	}
@@ -373,7 +377,7 @@ exit:
 static int ovt_tcm_i2c_write(struct ovt_tcm_hcd *tcm_hcd, unsigned char *data,
 		unsigned int length)
 {
-	int retval = -EIO;
+	int retval;
 	unsigned int attempt;
 	struct i2c_msg msg;
 	struct i2c_client *i2c = to_i2c_client(tcm_hcd->pdev->dev.parent);
@@ -394,8 +398,10 @@ static int ovt_tcm_i2c_write(struct ovt_tcm_hcd *tcm_hcd, unsigned char *data,
 				"Transfer attempt %d failed\n",
 				attempt + 1);
 
-		if (attempt + 1 == XFER_ATTEMPTS)
+		if (attempt + 1 == XFER_ATTEMPTS) {
+			retval = -EIO;
 			goto exit;
+		}
 
 		msleep(20);
 	}

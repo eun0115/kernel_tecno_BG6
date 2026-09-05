@@ -573,7 +573,9 @@ out_reset_timer:
 	    tcp_stream_is_thin(tp) &&
 	    icsk->icsk_retransmits <= TCP_THIN_LINEAR_RETRIES) {
 		icsk->icsk_backoff = 0;
-		icsk->icsk_rto = min(__tcp_set_rto(tp), TCP_RTO_MAX);
+		icsk->icsk_rto = clamp(__tcp_set_rto(tp),
+				       tcp_rto_min(sk),
+				       TCP_RTO_MAX);
 	} else {
 		/* Use normal (exponential) backoff */
 		icsk->icsk_rto = min(icsk->icsk_rto << 1, TCP_RTO_MAX);
@@ -602,6 +604,7 @@ void tcp_write_timer_handler(struct sock *sk)
 		goto out;
 	}
 
+	tcp_rate_check_app_limited(sk);
 	tcp_mstamp_refresh(tcp_sk(sk));
 	event = icsk->icsk_pending;
 
