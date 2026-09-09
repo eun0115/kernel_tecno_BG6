@@ -9,6 +9,7 @@
 #include <linux/ptrace.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
+#include <linux/pgsize_migration.h>
 #include <linux/mempolicy.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
@@ -434,7 +435,14 @@ done:
 
 static int show_map(struct seq_file *m, void *v)
 {
-	show_map_vma(m, v);
+	struct vm_area_struct *pad_vma = get_pad_vma(v);
+	struct vm_area_struct *vma = get_data_vma(v);
+
+	if (vma_pages(vma))
+		show_map_vma(m, vma);
+
+	show_map_pad_vma(vma, pad_vma, m, show_map_vma, false);
+
 	m_cache_vma(m, v);
 	return 0;
 }
@@ -509,46 +517,6 @@ struct mem_size_stats {
 	u64 swap_pss;
 	bool check_shmem_swap;
 };
-
-#ifdef CONFIG_ENHANCE_SMAPS_INFO
-static void
-show_smap_vma_sum(struct seq_file *m, struct proc_maps_private *priv,
-		struct mem_size_stats *mss)
-{
-	seq_put_decimal_ull_width(m, "Rss_All:\t",
-			(unsigned long)((priv->rss + mss->resident) >> 10), 8);
-	seq_put_decimal_ull_width(m, " kB\nPss_All:\t",
-			(unsigned long)((priv->pss + mss->pss) >> (10 + PSS_SHIFT)), 8);
-	seq_put_decimal_ull_width(m, " kB\nUss_All:\t",
-			(unsigned long)((priv->uss + mss->private_clean +
-				mss->private_dirty) >> 10), 8);
-	seq_put_decimal_ull_width(m, " kB\nRss_Filecache_All:\t",
-			(unsigned long)((priv->filecache_rss + mss->filecache) >> 10), 8);
-	seq_put_decimal_ull_width(m, " kB\nRss_Anonymous_All:\t",
-			(unsigned long)((priv->anonymous_rss + mss->anonymous) >> 10), 8);
-	seq_put_decimal_ull_width(m, " kB\nPss_Filecache_All:\t",
-			(unsigned long)((priv->filecache_pss + mss->pss_file) >>
-				(10 + PSS_SHIFT)), 8);
-	seq_put_decimal_ull_width(m, " kB\nPss_Anonymous_All:\t",
-			(unsigned long)((priv->anonymous_pss + mss->pss_anon) >>
-				(10 + PSS_SHIFT)), 8);
-	seq_put_decimal_ull_width(m, " kB\nUss_Filecache_All:\t",
-			(unsigned long)((priv->filecache_uss + mss->private_filecache) >>
-				10), 8);
-	seq_put_decimal_ull_width(m, " kB\nUss_Anonymous_All:\t",
-			(unsigned long)((priv->anonymous_uss + mss->private_anonymous) >>
-				10), 8);
-	seq_put_decimal_ull_width(m, " kB\nSwap_All:\t",
-			(unsigned long)((priv->swap + mss->swap) >> 10), 8);
-	seq_put_decimal_ull_width(m, " kB\nSwap_Pss_All:\t",
-			(unsigned long)((priv->swap_pss + mss->swap_pss) >> (10 +
-				PSS_SHIFT)), 8);
-	seq_put_decimal_ull_width(m, " kB\nSwap_Uss_All:\t",
-			(unsigned long)((priv->swap_uss + mss->swap_uss) >> (10 +
-				PSS_SHIFT)), 8);
-	seq_puts(m, " kB\n");
-}
-#endif
 
 static void smaps_page_accumulate(struct mem_size_stats *mss,
 		struct page *page, unsigned long size, unsigned long pss,
@@ -994,13 +962,10 @@ static void __show_smap(struct seq_file *m, const struct mem_size_stats *mss,
 	seq_puts(m, " kB\n");
 }
 
-static int show_smap(struct seq_file *m, void *v)
+static void show_smap_vma(struct seq_file *m, void *v)
 {
 	struct vm_area_struct *vma = v;
 	struct mem_size_stats mss;
-#ifdef CONFIG_ENHANCE_SMAPS_INFO
-	struct proc_maps_private *priv = m->private;
-#endif
 
 	memset(&mss, 0, sizeof(mss));
 
@@ -1026,29 +991,18 @@ static int show_smap(struct seq_file *m, void *v)
 	if (arch_pkeys_enabled())
 		seq_printf(m, "ProtectionKey:  %8u\n", vma_pkey(vma));
 	show_smap_vma_flags(m, vma);
+}
 
-#ifdef CONFIG_ENHANCE_SMAPS_INFO
-	if (m_next_vma(priv, vma) == NULL)
-		show_smap_vma_sum(m, priv, &mss);
+static int show_smap(struct seq_file *m, void *v)
+{
+	struct vm_area_struct *pad_vma = get_pad_vma(v);
+	struct vm_area_struct *vma = get_data_vma(v);
 
-	if (m->count < m->size) {
-		priv->rss += mss.resident;
-		priv->pss += mss.pss;
-		priv->uss += mss.private_clean + mss.private_dirty;
-		priv->filecache_rss += mss.filecache;
-		priv->anonymous_rss += mss.anonymous;
-		priv->filecache_pss += mss.pss_file;
-		priv->anonymous_pss += mss.pss_anon;
-		priv->filecache_uss += mss.private_filecache;
-		priv->anonymous_uss += mss.private_anonymous;
-		priv->swap += mss.swap;
-		priv->swap_pss += mss.swap_pss;
-		priv->swap_uss += mss.swap_uss;
-	}
-#endif
+	show_smap_vma(m, vma);
 
-	m_cache_vma(m, vma);
+	show_map_pad_vma(vma, pad_vma, m, show_smap_vma, true);
 
+	m_cache_vma(m, v);
 	return 0;
 }
 
