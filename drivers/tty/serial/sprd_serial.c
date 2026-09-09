@@ -382,7 +382,7 @@ static void sprd_rx_free_buf(struct sprd_uart_port *sp)
 	if (sp->rx_dma.virt)
 		dma_free_coherent(sp->port.dev, SPRD_UART_RX_SIZE,
 				  sp->rx_dma.virt, sp->rx_dma.phys_addr);
-
+	sp->rx_dma.virt = NULL;
 }
 
 static int sprd_rx_dma_config(struct uart_port *port, u32 burst)
@@ -1159,29 +1159,6 @@ static struct uart_driver sprd_uart_driver = {
 	.cons = SPRD_CONSOLE,
 };
 
-static int sprd_probe_dt_alias(int index, struct device *dev)
-{
-	struct device_node *np;
-	int ret = index;
-
-	if (!IS_ENABLED(CONFIG_OF))
-		return ret;
-
-	np = dev->of_node;
-	if (!np)
-		return ret;
-
-	ret = of_alias_get_id(np, "serial");
-	if (ret < 0)
-		ret = index;
-	else if (ret >= ARRAY_SIZE(sprd_port) || sprd_port[ret] != NULL) {
-		dev_warn(dev, "requested serial port %d not available.\n", ret);
-		ret = index;
-	}
-
-	return ret;
-}
-
 static int sprd_remove(struct platform_device *dev)
 {
 	struct sprd_uart_port *sup = platform_get_drvdata(dev);
@@ -1213,7 +1190,7 @@ static bool sprd_uart_is_console(struct uart_port *uport)
 static int sprd_clk_init(struct uart_port *uport)
 {
 	struct clk *clk_uart, *clk_parent;
-	struct sprd_uart_port *u = sprd_port[uport->line];
+	struct sprd_uart_port *u = container_of(uport, struct sprd_uart_port, port);
 
 	clk_uart = devm_clk_get(uport->dev, "uart");
 	if (IS_ERR(clk_uart)) {
@@ -1301,26 +1278,22 @@ static int sprd_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	struct uart_port *up;
+	struct sprd_uart_port *sport;
 	int irq;
 	int index;
 	int ret;
 
-	for (index = 0; index < ARRAY_SIZE(sprd_port); index++)
-		if (sprd_port[index] == NULL)
-			break;
+	index = of_alias_get_id(pdev->dev.of_node, "serial");
+	if (index < 0 || index >= UART_NR_MAX) {
+		dev_err(&pdev->dev, "got a wrong serial alias id %d\n", index);
+		return -EINVAL;
+	}
 
-	if (index == ARRAY_SIZE(sprd_port))
-		return -EBUSY;
-
-	index = sprd_probe_dt_alias(index, &pdev->dev);
-
-	sprd_port[index] = devm_kzalloc(&pdev->dev, sizeof(*sprd_port[index]),
-					GFP_KERNEL);
-	if (!sprd_port[index])
+	sport = devm_kzalloc(&pdev->dev, sizeof(*sport), GFP_KERNEL);
+	if (!sport)
 		return -ENOMEM;
 
-	sprd_port[index]->is_console = 0;
-	up = &sprd_port[index]->port;
+	up = &sport->port;
 	up->dev = &pdev->dev;
 	up->line = index;
 	up->type = PORT_SPRD;
@@ -1362,26 +1335,33 @@ static int sprd_probe(struct platform_device *pdev)
 	 * Allocate one dma buffer to prepare for receive transfer, in case
 	 * memory allocation failure at runtime.
 	 */
-	ret = sprd_rx_alloc_buf(sprd_port[index]);
-	if (ret)
-		return ret;
+	ret = sprd_rx_alloc_buf(sport);
+    if (!sprd_ports_num) {
+        ret = uart_register_driver(&sprd_uart_driver);
+        if (ret < 0) {
+            pr_err("Failed to register SPRD-UART driver\n");
+            goto free_rx_buf;
+        }
+    }
 
-	if (!sprd_ports_num) {
-		ret = uart_register_driver(&sprd_uart_driver);
-		if (ret < 0) {
-			pr_err("Failed to register SPRD-UART driver\n");
-			return ret;
-		}
-	}
-	sprd_ports_num++;
-	ret = uart_add_one_port(&sprd_uart_driver, up);
-	if (ret) {
-		sprd_port[index] = NULL;
-		sprd_remove(pdev);
-	}
+    sprd_ports_num++;
+    sprd_port[index] = sport;
 
-	platform_set_drvdata(pdev, up);
-	return ret;
+    ret = uart_add_one_port(&sprd_uart_driver, up);
+    if (ret)
+        goto clean_port;
+
+    platform_set_drvdata(pdev, up);
+
+    return 0;
+
+clean_port:
+    sprd_port[index] = NULL;
+    if (--sprd_ports_num == 0)
+        uart_unregister_driver(&sprd_uart_driver);
+free_rx_buf:
+    sprd_rx_free_buf(sport);
+    return ret;
 }
 
 #ifdef CONFIG_PM_SLEEP
